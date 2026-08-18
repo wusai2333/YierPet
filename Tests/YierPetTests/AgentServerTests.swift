@@ -102,6 +102,62 @@ import Testing
     #expect(received?.payload == Data(#"{"message":"hi"}"#.utf8))
 }
 
+@Test func negativeContentLengthRejectedWithoutCrash() {
+    let server = AgentServer()
+    server.queue = DispatchQueue(label: "AgentServerTests.negative-cl")
+    var received: AgentEvent?
+    server.onEvent = { received = $0 }
+    server.start()
+    defer { server.stop() }
+    let readyDeadline = Date().addingTimeInterval(5)
+    while server.endpointString == nil && Date() < readyDeadline {
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    guard let port = server.port else {
+        Issue.record("server never became ready")
+        return
+    }
+
+    // URLSession 会按 body 改写 Content-Length，负数头必须手搓原始 TCP
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else {
+        Issue.record("socket() failed")
+        return
+    }
+    defer { close(fd) }
+    var tv = timeval(tv_sec: 5, tv_usec: 0)
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv,
+               socklen_t(MemoryLayout<timeval>.size))
+    var addr = sockaddr_in()
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_port = in_port_t(port).bigEndian
+    addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+    let connected = withUnsafePointer(to: &addr) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    guard connected == 0 else {
+        Issue.record("connect() failed")
+        return
+    }
+    let raw = "POST /event HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        + "X-YierPet-Tool: qwen\r\nX-YierPet-Hook: Stop\r\n"
+        + "Content-Length: -1\r\n\r\n"
+    _ = raw.withCString { write(fd, $0, strlen($0)) }
+    var response = Data()
+    var buf = [UInt8](repeating: 0, count: 4096)
+    while true {
+        let n = read(fd, &buf, buf.count)
+        if n <= 0 { break }
+        response.append(contentsOf: buf[..<n])
+    }
+    // 服务未崩溃、以 400 拒绝，且不交付事件
+    #expect(String(data: response, encoding: .utf8)?
+        .contains("400") == true)
+    #expect(received == nil)
+}
+
 @Test func oversizedBodyDeliversEventWithoutPayload() throws {
     let server = AgentServer()
     server.queue = DispatchQueue(label: "agent-server-test-2")

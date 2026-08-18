@@ -118,6 +118,8 @@ final class AgentServer {
         else { return .invalid }
         let cwd = headers["x-yierpet-cwd"] ?? ""
         let contentLength = Int(headers["content-length"] ?? "0") ?? 0
+        // 负数 Content-Length 非法：拒绝，防 prefix 负数越界崩溃
+        guard contentLength >= 0 else { return .invalid }
         // 超限：丢摘要不丢提醒，不等 body 直接交付（payload 为 nil）
         guard contentLength <= maxBodyBytes else {
             return .event(AgentEvent(tool: tool, hook: hook, cwd: cwd))
