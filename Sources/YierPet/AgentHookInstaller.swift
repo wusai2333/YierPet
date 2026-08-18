@@ -51,7 +51,9 @@ enum AgentHookInstaller {
       }
     }
 
-    function post(hook: string, cwd: string): void {
+    let lastAssistantText = "";
+
+    function post(hook: string, cwd: string, extra: Record<string, unknown> = {}): void {
       const url = endpoint();
       if (!url) return;
       fetch(url, {
@@ -62,29 +64,53 @@ enum AgentHookInstaller {
           "X-YierPet-Hook": hook,
           "X-YierPet-Cwd": cwd,
         },
-        body: "{}",
+        body: JSON.stringify(extra),
         signal: AbortSignal.timeout(1000),
       }).catch(() => {});
+    }
+
+    function trackAssistantText(event: { type: string; properties?: any }): void {
+      const props = event?.properties ?? {};
+      const message = props.message ?? props.info;
+      if (message && message.role && message.role !== "assistant") return;
+      const parts: any[] = Array.isArray(props.parts)
+        ? props.parts
+        : props.part ? [props.part] : [];
+      const text = parts
+        .filter((p) => p?.type === "text" && typeof p.text === "string")
+        .map((p) => p.text)
+        .join(" ")
+        .trim();
+      if (text) lastAssistantText = text;
     }
 
     export const YierPetPlugin = async (ctx: { directory?: string }) => {
       const directory = ctx?.directory || process.cwd();
       return {
-        event: async ({ event }: { event: { type: string } }) => {
+        event: async ({ event }: { event: any }) => {
           switch (event?.type) {
             case "session.idle":
-              post("Stop", directory);
+              post("Stop", directory, { text: lastAssistantText });
+              lastAssistantText = "";
               break;
-            case "session.error":
-              post("PostToolUseFailure", directory);
+            case "session.error": {
+              const err = event?.properties?.error;
+              const text = typeof err === "string"
+                ? err : (err?.message ?? "");
+              post("PostToolUseFailure", directory, { error: text });
               break;
+            }
             case "message.updated":
+            case "message.part.updated":
+              trackAssistantText(event);
               post("PostToolUse", directory);
               break;
           }
         },
-        "permission.ask": async () => {
-          post("PermissionRequest", directory);
+        "permission.ask": async (input: any) => {
+          const desc = `${input?.type ?? "permission"}${
+            input?.pattern ? ": " + input.pattern : ""}`;
+          post("PermissionRequest", directory, { permission: desc });
         },
       };
     };
@@ -107,7 +133,9 @@ enum AgentHookInstaller {
       }
     }
 
-    function post(hookEventName: string): void {
+    let lastAssistantText = ''
+
+    function post(hookEventName: string, extra: Record<string, unknown> = {}): void {
       const url = readEndpoint()
       if (!url) return
       const controller =
@@ -123,20 +151,37 @@ enum AgentHookInstaller {
           'X-YierPet-Hook': hookEventName,
           'X-YierPet-Cwd': process.cwd(),
         },
-        body: '{}',
+        body: JSON.stringify(extra),
         ...(controller ? { signal: controller.signal } : {}),
       }).catch(() => {}).finally(() => clearTimeout(timeout))
     }
 
+    function extractAssistantText(message): string {
+      const content = message?.content
+      if (typeof content === 'string') return content
+      if (!Array.isArray(content)) return ''
+      return content
+        .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+        .map((b) => b.text)
+        .join(' ')
+        .trim()
+    }
+
     export default function (pi): void {
-      pi.on('agent_start', () => post('UserPromptSubmit'))
+      pi.on('agent_start', () => {
+        lastAssistantText = ''
+        post('UserPromptSubmit')
+      })
       pi.on('tool_execution_start', () => post('PostToolUse'))
       pi.on('tool_execution_end', () => post('PostToolUse'))
       pi.on('message_end', (event) => {
-        if (event?.message?.role === 'assistant') post('PostToolUse')
+        if (event?.message?.role !== 'assistant') return
+        const text = extractAssistantText(event.message)
+        if (text) lastAssistantText = text
+        post('PostToolUse')
       })
-      pi.on('agent_settled', () => post('Stop'))
-      pi.on('agent_end', () => post('Stop'))
+      pi.on('agent_settled', () => post('Stop', { text: lastAssistantText }))
+      pi.on('agent_end', () => post('Stop', { text: lastAssistantText }))
     }
     """#
 
@@ -157,7 +202,9 @@ enum AgentHookInstaller {
       }
     }
 
-    function post(hookEventName: string): void {
+    let lastAssistantText = ''
+
+    function post(hookEventName: string, extra: Record<string, unknown> = {}): void {
       const url = readEndpoint()
       if (!url) return
       const controller =
@@ -173,20 +220,37 @@ enum AgentHookInstaller {
           'X-YierPet-Hook': hookEventName,
           'X-YierPet-Cwd': process.cwd(),
         },
-        body: '{}',
+        body: JSON.stringify(extra),
         ...(controller ? { signal: controller.signal } : {}),
       }).catch(() => {}).finally(() => clearTimeout(timeout))
     }
 
+    function extractAssistantText(message): string {
+      const content = message?.content
+      if (typeof content === 'string') return content
+      if (!Array.isArray(content)) return ''
+      return content
+        .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+        .map((b) => b.text)
+        .join(' ')
+        .trim()
+    }
+
     export default function (pi): void {
-      pi.on('agent_start', () => post('UserPromptSubmit'))
+      pi.on('agent_start', () => {
+        lastAssistantText = ''
+        post('UserPromptSubmit')
+      })
       pi.on('tool_execution_start', () => post('PostToolUse'))
       pi.on('tool_execution_end', () => post('PostToolUse'))
       pi.on('message_end', (event) => {
-        if (event?.message?.role === 'assistant') post('PostToolUse')
+        if (event?.message?.role !== 'assistant') return
+        const text = extractAssistantText(event.message)
+        if (text) lastAssistantText = text
+        post('PostToolUse')
       })
-      pi.on('agent_settled', () => post('Stop'))
-      pi.on('agent_end', () => post('Stop'))
+      pi.on('agent_settled', () => post('Stop', { text: lastAssistantText }))
+      pi.on('agent_end', () => post('Stop', { text: lastAssistantText }))
     }
     """#
 
