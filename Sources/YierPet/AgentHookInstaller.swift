@@ -16,6 +16,8 @@ enum AgentHookInstaller {
         .appendingPathComponent(".config/opencode/plugins/yierpet.ts")
     static let ompExtensionURL = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent(".omp/agent/extensions/yierpet-status.ts")
+    static let omoExtensionURL = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent(".omo/agent/extensions/yierpet-status.ts")
 
     private static let script = """
     #!/bin/sh
@@ -118,6 +120,56 @@ enum AgentHookInstaller {
         headers: {
           'Content-Type': 'application/json',
           'X-YierPet-Tool': 'omp',
+          'X-YierPet-Hook': hookEventName,
+          'X-YierPet-Cwd': process.cwd(),
+        },
+        body: '{}',
+        ...(controller ? { signal: controller.signal } : {}),
+      }).catch(() => {}).finally(() => clearTimeout(timeout))
+    }
+
+    export default function (pi): void {
+      pi.on('agent_start', () => post('UserPromptSubmit'))
+      pi.on('tool_execution_start', () => post('PostToolUse'))
+      pi.on('tool_execution_end', () => post('PostToolUse'))
+      pi.on('message_end', (event) => {
+        if (event?.message?.role === 'assistant') post('PostToolUse')
+      })
+      pi.on('agent_settled', () => post('Stop'))
+      pi.on('agent_end', () => post('Stop'))
+    }
+    """#
+
+    private static let omoExtensionSource = #"""
+    // YierPet agent sentinel — forwards omo/senpi status to YierPet.
+    // Same pattern as orca-agent-status.ts: endpoint file + fire-and-forget.
+    const HOOK_POST_TIMEOUT_MS = 1000
+
+    function readEndpoint(): string | null {
+      try {
+        const fs = require('fs')
+        const url = String(
+          fs.readFileSync(`${process.env.HOME}/.yierpet/endpoint`, 'utf8')
+        ).trim()
+        return url || null
+      } catch {
+        return null
+      }
+    }
+
+    function post(hookEventName: string): void {
+      const url = readEndpoint()
+      if (!url) return
+      const controller =
+        typeof AbortController !== 'undefined' ? new AbortController() : null
+      const timeout = setTimeout(
+        () => controller?.abort(), HOOK_POST_TIMEOUT_MS)
+      if (typeof timeout.unref === 'function') timeout.unref()
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-YierPet-Tool': 'omo',
           'X-YierPet-Hook': hookEventName,
           'X-YierPet-Cwd': process.cwd(),
         },
@@ -290,6 +342,18 @@ enum AgentHookInstaller {
         try? FileManager.default.removeItem(at: ompExtensionURL)
     }
 
+    static func installOmoExtension() throws {
+        let extensionDir = omoExtensionURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: extensionDir, withIntermediateDirectories: true)
+        try omoExtensionSource.data(using: .utf8)?
+            .write(to: omoExtensionURL)
+    }
+
+    static func uninstallOmoExtension() {
+        try? FileManager.default.removeItem(at: omoExtensionURL)
+    }
+
     // MARK: - dsh built-in pet
 
     static let dshSettingsURL = URL(fileURLWithPath: NSHomeDirectory())
@@ -349,6 +413,12 @@ enum AgentHookInstaller {
         } catch {
             failed.append("omp")
         }
+        do {
+            try installOmoExtension()
+            ok.append("omo")
+        } catch {
+            failed.append("omo")
+        }
         disableDshBuiltinPet()
         var summary = "钩子已安装：\(ok.joined(separator: "、"))"
         if !failed.isEmpty {
@@ -368,6 +438,7 @@ enum AgentHookInstaller {
         }
         uninstallOpencodePlugin()
         uninstallOmpExtension()
+        uninstallOmoExtension()
         try? FileManager.default.removeItem(at: scriptURL)
         try? FileManager.default.removeItem(at: AgentServer.endpointURL)
         return "Agent 钩子已卸载"

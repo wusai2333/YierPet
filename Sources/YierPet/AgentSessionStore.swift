@@ -2,7 +2,7 @@ import Foundation
 
 /// Agent tools that YierPet can watch.
 enum AgentTool: String, CaseIterable {
-    case qwen, qodercli, opencode, omp, dsh
+    case qwen, qodercli, opencode, omp, omo, dsh
 }
 
 /// What the pet should announce.
