@@ -17,6 +17,10 @@ enum ReminderKind: String, CaseIterable {
     case afternoonCoffee
     case fridayEvening
     case ideOvertime
+    // Agent sentinel（Agent 哨兵）
+    case agentNeedsConfirm
+    case agentDone
+    case agentError
 
     var title: String {
         switch self {
@@ -34,6 +38,9 @@ enum ReminderKind: String, CaseIterable {
         case .afternoonCoffee: return "下午咖啡"
         case .fridayEvening: return "周五撒欢"
         case .ideOvertime: return "编码久战"
+        case .agentNeedsConfirm: return "等待确认"
+        case .agentDone: return "任务完成"
+        case .agentError: return "任务报错"
         }
     }
 
@@ -57,13 +64,24 @@ enum ReminderKind: String, CaseIterable {
         }
     }
 
+    /// Agent 哨兵提醒（由 AgentCenter 驱动，不走 tick）。
+    var isAgent: Bool {
+        switch self {
+        case .agentNeedsConfirm, .agentDone, .agentError:
+            return true
+        default:
+            return false
+        }
+    }
+
     static var healthCases: [ReminderKind] {
-        allCases.filter { !$0.isSystem && !$0.isCompanion }
+        allCases.filter { !$0.isSystem && !$0.isCompanion && !$0.isAgent }
     }
     static var systemCases: [ReminderKind] { allCases.filter { $0.isSystem } }
     static var companionCases: [ReminderKind] {
         allCases.filter { $0.isCompanion }
     }
+    static var agentCases: [ReminderKind] { allCases.filter { $0.isAgent } }
 
     var defaultsKey: String { "reminder.\(rawValue).enabled" }
 }
@@ -268,6 +286,8 @@ final class ReminderCenter {
                 .weekOfYear, from: Date())
         case .ideOvertime:
             ideWorkSeconds = 0
+        default:
+            break
         }
         lastAnyFire = Date()
         var message = Self.messages[kind]?.randomElement() ?? ""
