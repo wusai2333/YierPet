@@ -130,6 +130,7 @@ final class PetController: NSObject {
     // Speech + reminders
     private var bubble: SpeechBubble?
     private let reminderCenter = ReminderCenter()
+    private let agentCenter = AgentCenter()
     private var sleepy = false
 
     // Mood system（惰性求值，不新增定时器）
@@ -166,8 +167,10 @@ final class PetController: NSObject {
         case .love: return ["love", "happy"]
         case .happy: return ["happy"]
         case .normal:
-            let tags = reminderCenter.frontEmotionTags
-            return tags.isEmpty ? ["idle", "lazy", "happy"] : tags
+            var tags = reminderCenter.frontEmotionTags
+            if tags.isEmpty { tags = ["idle", "lazy", "happy"] }
+            if agentCenter.anyWorking { tags.insert("work", at: 0) }
+            return tags
         }
     }
 
@@ -217,6 +220,8 @@ final class PetController: NSObject {
         bubble = SpeechBubble(parent: window)
         reminderCenter.delegate = self
         reminderCenter.start()
+        agentCenter.delegate = self
+        agentCenter.start()
         applyStyle(PetStyle.saved)
         scheduleRandomBehavior()
     }
@@ -717,6 +722,39 @@ final class PetController: NSObject {
         menu.addItem(companionItem)
         menu.setSubmenu(companionMenu, for: companionItem)
 
+        // Agent sentinel toggles
+        let agentMenu = NSMenu()
+        let agentMasterItem = NSMenuItem(
+            title: agentCenter.isEnabled ? "停用 Agent 哨兵" : "启用 Agent 哨兵",
+            action: #selector(menuToggleAgentMaster),
+            keyEquivalent: ""
+        )
+        agentMasterItem.target = self
+        agentMenu.addItem(agentMasterItem)
+        for tool in AgentTool.allCases {
+            let item = NSMenuItem(
+                title: "监听 \(tool.rawValue)",
+                action: #selector(menuToggleAgentTool(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = tool.rawValue
+            item.state = agentCenter.isEnabled(tool) ? .on : .off
+            agentMenu.addItem(item)
+        }
+        let agentSoundItem = NSMenuItem(
+            title: "提示音",
+            action: #selector(menuToggleAgentSound),
+            keyEquivalent: ""
+        )
+        agentSoundItem.target = self
+        agentSoundItem.state = agentCenter.soundEnabled ? .on : .off
+        agentMenu.addItem(agentSoundItem)
+        let agentItem = NSMenuItem(
+            title: "Agent 哨兵", action: nil, keyEquivalent: "")
+        menu.addItem(agentItem)
+        menu.setSubmenu(agentMenu, for: agentItem)
+
         // Hidden test menu: hold Option while right-clicking
         if NSEvent.modifierFlags.contains(.option) {
             let testMenu = NSMenu()
@@ -773,10 +811,28 @@ final class PetController: NSObject {
         reminderCenter.setEnabled(kind, !reminderCenter.isEnabled(kind))
     }
 
+    @objc private func menuToggleAgentMaster() {
+        agentCenter.setEnabled(!agentCenter.isEnabled)
+    }
+
+    @objc private func menuToggleAgentTool(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let tool = AgentTool(rawValue: raw) else { return }
+        agentCenter.setEnabled(tool, !agentCenter.isEnabled(tool))
+    }
+
+    @objc private func menuToggleAgentSound() {
+        agentCenter.setSoundEnabled(!agentCenter.soundEnabled)
+    }
+
     @objc private func menuTestReminder(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
               let kind = ReminderKind(rawValue: raw) else { return }
-        reminderCenter.fire(kind)
+        if kind.isAgent {
+            agentCenter.simulate(kind)
+        } else {
+            reminderCenter.fire(kind)
+        }
     }
 
     @objc private func menuQuit() {
@@ -880,5 +936,52 @@ extension PetController: ReminderCenterDelegate {
     func reminderCenter(_ center: ReminderCenter, sleepyChanged sleepy: Bool) {
         // Only reminders speak; entering night mode just slows the idle pace.
         self.sleepy = sleepy
+    }
+}
+
+// MARK: - AgentCenterDelegate
+
+extension PetController: AgentCenterDelegate {
+    func agentCenter(
+        _ center: AgentCenter, fire kind: ReminderKind, message: String
+    ) {
+        guard !isThrowing else { return }
+        stopWalk()
+        say(message, duration: 6)
+
+        if center.soundEnabled {
+            let soundName: NSSound.Name?
+            switch kind {
+            case .agentNeedsConfirm: soundName = "Glass"
+            case .agentError: soundName = "Basso"
+            default: soundName = nil
+            }
+            if let soundName { NSSound(named: soundName)?.play() }
+        }
+
+        if style.isSticker {
+            switch kind {
+            case .agentNeedsConfirm:
+                playStickerTags(["hot", "tired"], loops: 3)
+            case .agentDone:
+                playStickerTags(["happy", "love"], loops: 2)
+            case .agentError:
+                playStickerTags(["sad", "tired"], loops: 2)
+            default:
+                break
+            }
+            return
+        }
+
+        switch kind {
+        case .agentNeedsConfirm:
+            playOnce(.waiting, loops: 3)
+        case .agentDone:
+            playOnce(.waving, loops: 2)
+        case .agentError:
+            playOnce(.failed, loops: 2)
+        default:
+            break
+        }
     }
 }
