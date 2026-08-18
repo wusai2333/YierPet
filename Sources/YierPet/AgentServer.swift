@@ -23,6 +23,8 @@ final class AgentServer {
     }
 
     func start() {
+        // 幂等：先收掉旧 listener，重复调用（如重装钩子）不泄漏
+        stop()
         let params = NWParameters.tcp
         // 仅本机回环可达
         params.requiredInterfaceType = .loopback

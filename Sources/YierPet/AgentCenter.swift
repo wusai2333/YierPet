@@ -71,10 +71,10 @@ final class AgentCenter {
         server.stop()
     }
 
-    private func tick() {
+    /// `now` 供测试注入；timer 走默认值。单工具开关门控到期重提醒。
+    func tick(at now: Date = Date()) {
         guard isEnabled else { return }
-        let now = Date()
-        for alert in store.dueNudges(at: now) {
+        for alert in store.dueNudges(at: now) where isEnabled(alert.tool) {
             fire(alert)
         }
         store.pruneStale(at: now)

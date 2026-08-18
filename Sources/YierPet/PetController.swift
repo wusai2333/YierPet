@@ -861,10 +861,14 @@ final class PetController: NSObject {
 
     @objc private func menuInstallAgentHooks() {
         say(AgentHookInstaller.installAll(), duration: 8)
+        // start() 幂等：重启监听并重写 endpoint 指向当前端口
+        agentCenter.start()
     }
 
     @objc private func menuUninstallAgentHooks() {
         say(AgentHookInstaller.uninstallAll(), duration: 8)
+        // 钩子已删，服务一并收掉（endpoint 随之删除）
+        agentCenter.stop()
     }
 
     @objc private func menuTestReminder(_ sender: NSMenuItem) {
