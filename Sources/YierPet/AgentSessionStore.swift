@@ -103,16 +103,14 @@ struct AgentSessionStore {
                 session.lastNudge = now
                 alert = AgentAlert(
                     kind: .needsConfirm, tool: event.tool,
-                    project: Self.project(of: event.cwd),
-                    detail: detail ?? session.lastDetail)
+                    project: Self.project(of: event.cwd), detail: detail)
             }
         case "Stop":
             session.state = .done
             if previous != .done {
                 alert = AgentAlert(
                     kind: .done, tool: event.tool,
-                    project: Self.project(of: event.cwd),
-                    detail: detail ?? session.lastDetail)
+                    project: Self.project(of: event.cwd), detail: detail)
             }
         case "PostToolUseFailure":
             session.state = .working
@@ -121,12 +119,15 @@ struct AgentSessionStore {
                 session.lastErrorAlert = now
                 alert = AgentAlert(
                     kind: .error, tool: event.tool,
-                    project: Self.project(of: event.cwd),
-                    detail: detail ?? session.lastDetail)
+                    project: Self.project(of: event.cwd), detail: detail)
             }
         default:
             // Heartbeats: UserPromptSubmit/PreToolUse/PostToolUse/Subagent*
             session.state = .working
+            if event.hook == "UserPromptSubmit" {
+                // 新轮次：清掉上一轮摘要，防提取失败时气泡显示陈旧内容
+                session.lastDetail = nil
+            }
         }
 
         sessions[key] = session

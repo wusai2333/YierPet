@@ -85,19 +85,25 @@ private func event(
 
 @Test func detailFlowsToAlertsAndNudges() {
     var store = AgentSessionStore()
-    // 心跳携带内容：不提醒，但记住摘要
+    // 告警只携带本事件自己的摘要，不回退旧摘要
     _ = store.apply(
         event("PostToolUse"),
         detail: "中间过程摘要", at: t0)
-    // 完成提醒带上最后的摘要
     let done = store.apply(event("Stop"), detail: nil, at: t0 + 5)
     #expect(done?.kind == .done)
-    #expect(done?.detail == "中间过程摘要")
-    // 等确认自带摘要；轻提醒复用
+    #expect(done?.detail == nil)
+    // 等确认自带摘要；轻提醒复用会话最近摘要
     let confirm = store.apply(
         event("PermissionRequest"), detail: "要执行 ls", at: t0 + 10)
     #expect(confirm?.detail == "要执行 ls")
     let nudges = store.dueNudges(at: t0 + 10 + 121)
     #expect(nudges.count == 1)
     #expect(nudges.first?.detail == "要执行 ls")
+    // 新轮次（UserPromptSubmit）清空旧摘要，防陈旧内容串到新提醒
+    _ = store.apply(event("UserPromptSubmit"), at: t0 + 300)
+    let confirm2 = store.apply(
+        event("PermissionRequest"), detail: nil, at: t0 + 310)
+    #expect(confirm2?.detail == nil)
+    let nudges2 = store.dueNudges(at: t0 + 310 + 121)
+    #expect(nudges2.first?.detail == nil)
 }
