@@ -204,3 +204,82 @@ private func pluginList(_ root: [String: Any]) -> [String] {
     ])
     #expect(root["other"] as? Int == 1)
 }
+
+// MARK: - dsh built-in pet disable
+
+// 夹具单测：patchDshPetVisible 接受任意路径，全程只在临时目录操作，
+// 绝不碰用户真实的 ~/.dsh/settings.yaml。
+
+private func makeDshFixture(_ contents: String) throws -> (
+    dir: URL, settings: URL
+) {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("yierpet-test-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(
+        at: dir, withIntermediateDirectories: true)
+    let settings = dir.appendingPathComponent("settings.yaml")
+    try contents.data(using: .utf8)!.write(to: settings)
+    return (dir, settings)
+}
+
+@Test func patchDshPetVisibleFlipsTrueAndBacksUp() throws {
+    let fixture = try makeDshFixture("""
+    ui-theme:
+      preference: dark
+    pet:
+      visible: true
+      size: 160
+      name: 鲸鱼娘
+
+    """)
+    defer { try? FileManager.default.removeItem(at: fixture.dir) }
+    AgentHookInstaller.patchDshPetVisible(
+        settingsPath: fixture.settings.path)
+
+    let patched = try String(
+        contentsOf: fixture.settings, encoding: .utf8)
+    #expect(patched.contains("pet:\n  visible: false"))
+    #expect(!patched.contains("visible: true"))
+    // 其余段落原样保留
+    #expect(patched.contains("ui-theme:\n  preference: dark"))
+    #expect(patched.contains("size: 160"))
+    #expect(patched.contains("name: 鲸鱼娘"))
+    // 写前备份已生成
+    #expect(FileManager.default.fileExists(
+        atPath: fixture.settings.path + ".yierpet-bak"))
+}
+
+@Test func patchDshPetVisibleNoOpWhenAlreadyHidden() throws {
+    let original = "pet:\n  visible: false\n  size: 160\n"
+    let fixture = try makeDshFixture(original)
+    defer { try? FileManager.default.removeItem(at: fixture.dir) }
+    AgentHookInstaller.patchDshPetVisible(
+        settingsPath: fixture.settings.path)
+
+    let after = try String(
+        contentsOf: fixture.settings, encoding: .utf8)
+    #expect(after == original)
+    // 无变更即不写回，也不留备份
+    #expect(!FileManager.default.fileExists(
+        atPath: fixture.settings.path + ".yierpet-bak"))
+}
+
+@Test func patchDshPetVisibleNoOpWithoutPetSection() throws {
+    let original = "ui-theme:\n  preference: dark\n"
+    let fixture = try makeDshFixture(original)
+    defer { try? FileManager.default.removeItem(at: fixture.dir) }
+    AgentHookInstaller.patchDshPetVisible(
+        settingsPath: fixture.settings.path)
+
+    let after = try String(
+        contentsOf: fixture.settings, encoding: .utf8)
+    #expect(after == original)
+}
+
+@Test func patchDshPetVisibleNoOpWhenFileMissing() {
+    let missing = FileManager.default.temporaryDirectory
+        .appendingPathComponent("yierpet-test-\(UUID().uuidString)")
+        .appendingPathComponent("settings.yaml")
+    // 文件不存在不得崩溃
+    AgentHookInstaller.patchDshPetVisible(settingsPath: missing.path)
+}

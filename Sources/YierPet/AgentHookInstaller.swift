@@ -290,6 +290,34 @@ enum AgentHookInstaller {
         try? FileManager.default.removeItem(at: ompExtensionURL)
     }
 
+    // MARK: - dsh built-in pet
+
+    static let dshSettingsURL = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent(".dsh/settings.yaml")
+
+    /// Testable layer behind disableDshBuiltinPet(): flips
+    /// "pet:\n  visible: true" to false in the settings file at
+    /// settingsPath, backing it up first. No-ops when the file is
+    /// missing, has no visible pet section, or is already hidden.
+    static func patchDshPetVisible(settingsPath: String) {
+        let url = URL(fileURLWithPath: settingsPath)
+        guard let text = try? String(contentsOf: url, encoding: .utf8)
+        else { return }
+        let patched = text.replacingOccurrences(
+            of: "pet:\n  visible: true",
+            with: "pet:\n  visible: false")
+        guard patched != text else { return }
+        backup(url)
+        try? patched.data(using: .utf8)?.write(to: url)
+    }
+
+    /// YierPet 取代 dsh 内置宠物（鲸鱼娘）：pet.visible → false。
+    /// dsh 无自动发现的扩展目录（扩展是 Cordis 插件，按 profile 组合），
+    /// 事件接入留空；卸载时也不恢复 pet.visible，避免鲸鱼娘突然复活。
+    static func disableDshBuiltinPet() {
+        patchDshPetVisible(settingsPath: dshSettingsURL.path)
+    }
+
     // MARK: - Orchestration
 
     static func installAll() -> String {
@@ -321,6 +349,7 @@ enum AgentHookInstaller {
         } catch {
             failed.append("omp")
         }
+        disableDshBuiltinPet()
         var summary = "钩子已安装：\(ok.joined(separator: "、"))"
         if !failed.isEmpty {
             summary += "；失败：\(failed.joined(separator: "、"))"
