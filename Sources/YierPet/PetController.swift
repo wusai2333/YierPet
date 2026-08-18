@@ -765,6 +765,25 @@ final class PetController: NSObject {
         )
         uninstallItem.target = self
         agentMenu.addItem(uninstallItem)
+        let sessions = agentCenter.snapshot
+        if !sessions.isEmpty {
+            agentMenu.addItem(.separator())
+            for info in sessions {
+                let stateText: String
+                switch info.state {
+                case .working: stateText = "干活中"
+                case .needsConfirm: stateText = "等确认"
+                case .done: stateText = "已完成"
+                }
+                let item = NSMenuItem(
+                    title: "\(info.tool.rawValue) · \(info.project) — \(stateText)",
+                    action: nil,
+                    keyEquivalent: ""
+                )
+                item.isEnabled = false
+                agentMenu.addItem(item)
+            }
+        }
         let agentItem = NSMenuItem(
             title: "Agent 哨兵", action: nil, keyEquivalent: "")
         menu.addItem(agentItem)
