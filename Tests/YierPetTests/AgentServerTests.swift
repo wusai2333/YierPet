@@ -69,3 +69,68 @@ import Testing
     _ = sem.wait(timeout: .now() + 5)
     // 活着走到这里即通过（服务未崩溃、连接被正常关闭）
 }
+
+@Test func deliversBodyAsPayload() throws {
+    let server = AgentServer()
+    server.queue = DispatchQueue(label: "agent-server-test-1")
+    var received: AgentEvent?
+    server.onEvent = { received = $0 }
+    server.start()
+    defer { server.stop() }
+    let readyDeadline = Date().addingTimeInterval(5)
+    while server.endpointString == nil && Date() < readyDeadline {
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    guard let endpoint = server.endpointString,
+          let url = URL(string: endpoint)
+    else {
+        Issue.record("server never became ready")
+        return
+    }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.timeoutInterval = 3
+    request.setValue("qwen", forHTTPHeaderField: "X-YierPet-Tool")
+    request.setValue("Notification", forHTTPHeaderField: "X-YierPet-Hook")
+    request.setValue("/w/proj", forHTTPHeaderField: "X-YierPet-Cwd")
+    request.httpBody = Data(#"{"message":"hi"}"#.utf8)
+    URLSession.shared.dataTask(with: request).resume()
+    let deadline = Date().addingTimeInterval(5)
+    while received == nil && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    #expect(received?.payload == Data(#"{"message":"hi"}"#.utf8))
+}
+
+@Test func oversizedBodyDeliversEventWithoutPayload() throws {
+    let server = AgentServer()
+    server.queue = DispatchQueue(label: "agent-server-test-2")
+    var received: AgentEvent?
+    server.onEvent = { received = $0 }
+    server.start()
+    defer { server.stop() }
+    let readyDeadline = Date().addingTimeInterval(5)
+    while server.endpointString == nil && Date() < readyDeadline {
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    guard let endpoint = server.endpointString,
+          let url = URL(string: endpoint)
+    else {
+        Issue.record("server never became ready")
+        return
+    }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.timeoutInterval = 5
+    request.setValue("qwen", forHTTPHeaderField: "X-YierPet-Tool")
+    request.setValue("Stop", forHTTPHeaderField: "X-YierPet-Hook")
+    request.setValue("/w/proj", forHTTPHeaderField: "X-YierPet-Cwd")
+    request.httpBody = Data(repeating: 65, count: 3 * 1024 * 1024)
+    URLSession.shared.dataTask(with: request).resume()
+    let deadline = Date().addingTimeInterval(10)
+    while received == nil && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    #expect(received?.hook == "Stop")
+    #expect(received?.payload == nil)
+}

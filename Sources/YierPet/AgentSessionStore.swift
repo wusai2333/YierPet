@@ -16,6 +16,7 @@ struct AgentAlert {
     let kind: AgentAlertKind
     let tool: AgentTool
     let project: String
+    var detail: String? = nil
 }
 
 /// One normalized hook event.
@@ -23,6 +24,7 @@ struct AgentEvent {
     let tool: AgentTool
     let hook: String
     let cwd: String
+    var payload: Data? = nil
 }
 
 /// Pure agent session state machine: no timers, no I/O. Callers inject `now`.
@@ -36,6 +38,7 @@ struct AgentSessionStore {
         var lastEvent: Date
         var lastNudge: Date
         var lastErrorAlert: Date
+        var lastDetail: String? = nil
     }
 
     struct SessionInfo {
@@ -74,7 +77,9 @@ struct AgentSessionStore {
     }
 
     /// Feeds one event. Returns an alert when this transition should notify.
-    mutating func apply(_ event: AgentEvent, at now: Date) -> AgentAlert? {
+    mutating func apply(
+        _ event: AgentEvent, detail: String? = nil, at now: Date
+    ) -> AgentAlert? {
         let key = Self.key(tool: event.tool, cwd: event.cwd)
 
         if event.hook == "SessionEnd" {
@@ -88,6 +93,7 @@ struct AgentSessionStore {
             lastErrorAlert: .distantPast)
         let previous = session.state
         session.lastEvent = now
+        if let detail, !detail.isEmpty { session.lastDetail = detail }
         var alert: AgentAlert?
 
         switch event.hook {
@@ -97,14 +103,16 @@ struct AgentSessionStore {
                 session.lastNudge = now
                 alert = AgentAlert(
                     kind: .needsConfirm, tool: event.tool,
-                    project: Self.project(of: event.cwd))
+                    project: Self.project(of: event.cwd),
+                    detail: detail ?? session.lastDetail)
             }
         case "Stop":
             session.state = .done
             if previous != .done {
                 alert = AgentAlert(
                     kind: .done, tool: event.tool,
-                    project: Self.project(of: event.cwd))
+                    project: Self.project(of: event.cwd),
+                    detail: detail ?? session.lastDetail)
             }
         case "PostToolUseFailure":
             session.state = .working
@@ -113,7 +121,8 @@ struct AgentSessionStore {
                 session.lastErrorAlert = now
                 alert = AgentAlert(
                     kind: .error, tool: event.tool,
-                    project: Self.project(of: event.cwd))
+                    project: Self.project(of: event.cwd),
+                    detail: detail ?? session.lastDetail)
             }
         default:
             // Heartbeats: UserPromptSubmit/PreToolUse/PostToolUse/Subagent*
@@ -136,7 +145,8 @@ struct AgentSessionStore {
             alerts.append(
                 AgentAlert(
                     kind: .needsConfirm, tool: session.tool,
-                    project: Self.project(of: session.cwd)))
+                    project: Self.project(of: session.cwd),
+                    detail: session.lastDetail))
         }
         return alerts
     }

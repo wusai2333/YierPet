@@ -82,3 +82,22 @@ private func event(
     #expect(store.apply(event("SubagentStop"), at: t0 + 30) == nil)
     #expect(store.snapshot.first?.state == .working)
 }
+
+@Test func detailFlowsToAlertsAndNudges() {
+    var store = AgentSessionStore()
+    // 心跳携带内容：不提醒，但记住摘要
+    _ = store.apply(
+        event("PostToolUse"),
+        detail: "中间过程摘要", at: t0)
+    // 完成提醒带上最后的摘要
+    let done = store.apply(event("Stop"), detail: nil, at: t0 + 5)
+    #expect(done?.kind == .done)
+    #expect(done?.detail == "中间过程摘要")
+    // 等确认自带摘要；轻提醒复用
+    let confirm = store.apply(
+        event("PermissionRequest"), detail: "要执行 ls", at: t0 + 10)
+    #expect(confirm?.detail == "要执行 ls")
+    let nudges = store.dueNudges(at: t0 + 10 + 121)
+    #expect(nudges.count == 1)
+    #expect(nudges.first?.detail == "要执行 ls")
+}

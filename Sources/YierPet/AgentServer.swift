@@ -67,29 +67,42 @@ final class AgentServer {
             var accumulated = buffer
             if let data { accumulated.append(data) }
 
-            if let event = Self.parse(accumulated) {
+            switch Self.parse(accumulated) {
+            case .event(let event):
                 self.onEvent?(event)
                 self.respond(connection: connection, status: "200 OK")
-                return
-            }
-            if error != nil || isComplete || accumulated.count > 65536 {
+            case .invalid:
                 self.respond(connection: connection, status: "400 Bad Request")
-                return
+            case .incomplete:
+                if error != nil || isComplete
+                    || accumulated.count > Self.maxBodyBytes + 4096 {
+                    self.respond(
+                        connection: connection, status: "400 Bad Request")
+                    return
+                }
+                self.receive(connection: connection, buffer: accumulated)
             }
-            self.receive(connection: connection, buffer: accumulated)
         }
     }
 
+    private static let maxBodyBytes = 2 * 1024 * 1024
+
+    private enum ParseResult {
+        case incomplete
+        case invalid
+        case event(AgentEvent)
+    }
+
     /// Parses one complete HTTP request (headers + body) into an event.
-    private static func parse(_ data: Data) -> AgentEvent? {
+    private static func parse(_ data: Data) -> ParseResult {
         guard let text = String(data: data, encoding: .utf8),
               let split = text.range(of: "\r\n\r\n")
-        else { return nil }
+        else { return .incomplete }
         let head = String(text[..<split.lowerBound])
         let lines = head.components(separatedBy: "\r\n")
-        guard let requestLine = lines.first else { return nil }
+        guard let requestLine = lines.first else { return .invalid }
         let parts = requestLine.split(separator: " ")
-        guard parts.count >= 2, parts[0] == "POST" else { return nil }
+        guard parts.count >= 2, parts[0] == "POST" else { return .invalid }
 
         var headers: [String: String] = [:]
         for line in lines.dropFirst() {
@@ -100,16 +113,24 @@ final class AgentServer {
                 .trimmingCharacters(in: .whitespaces)
             headers[key] = value
         }
-        let bodyStart = split.upperBound
-        let contentLength = Int(headers["content-length"] ?? "0") ?? 0
-        guard text[bodyStart...].utf8.count >= contentLength else {
-            return nil  // body 未收全，继续等
-        }
         guard let tool = AgentTool(rawValue: headers["x-yierpet-tool"] ?? ""),
               let hook = headers["x-yierpet-hook"]
-        else { return nil }
-        return AgentEvent(
-            tool: tool, hook: hook, cwd: headers["x-yierpet-cwd"] ?? "")
+        else { return .invalid }
+        let cwd = headers["x-yierpet-cwd"] ?? ""
+        let contentLength = Int(headers["content-length"] ?? "0") ?? 0
+        // 超限：丢摘要不丢提醒，不等 body 直接交付（payload 为 nil）
+        guard contentLength <= maxBodyBytes else {
+            return .event(AgentEvent(tool: tool, hook: hook, cwd: cwd))
+        }
+        let bodyStart = split.upperBound
+        let bodyText = text[bodyStart...]
+        guard bodyText.utf8.count >= contentLength else {
+            return .incomplete  // body 未收全，继续等
+        }
+        return .event(
+            AgentEvent(
+                tool: tool, hook: hook, cwd: cwd,
+                payload: Data(bodyText.utf8.prefix(contentLength))))
     }
 
     private func respond(connection: NWConnection, status: String) {
