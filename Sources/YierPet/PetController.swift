@@ -750,6 +750,21 @@ final class PetController: NSObject {
         agentSoundItem.target = self
         agentSoundItem.state = agentCenter.soundEnabled ? .on : .off
         agentMenu.addItem(agentSoundItem)
+        agentMenu.addItem(.separator())
+        let installItem = NSMenuItem(
+            title: "安装 Agent 钩子",
+            action: #selector(menuInstallAgentHooks),
+            keyEquivalent: ""
+        )
+        installItem.target = self
+        agentMenu.addItem(installItem)
+        let uninstallItem = NSMenuItem(
+            title: "卸载 Agent 钩子",
+            action: #selector(menuUninstallAgentHooks),
+            keyEquivalent: ""
+        )
+        uninstallItem.target = self
+        agentMenu.addItem(uninstallItem)
         let agentItem = NSMenuItem(
             title: "Agent 哨兵", action: nil, keyEquivalent: "")
         menu.addItem(agentItem)
@@ -823,6 +838,14 @@ final class PetController: NSObject {
 
     @objc private func menuToggleAgentSound() {
         agentCenter.setSoundEnabled(!agentCenter.soundEnabled)
+    }
+
+    @objc private func menuInstallAgentHooks() {
+        say(AgentHookInstaller.installAll(), duration: 8)
+    }
+
+    @objc private func menuUninstallAgentHooks() {
+        say(AgentHookInstaller.uninstallAll(), duration: 8)
     }
 
     @objc private func menuTestReminder(_ sender: NSMenuItem) {
