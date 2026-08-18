@@ -131,3 +131,76 @@ private func ownCount(_ root: [String: Any], event: String) -> Int {
     #expect(content.hasPrefix("#!/bin/sh"))
     #expect(content.contains("curl -m 1"))
 }
+
+// MARK: - opencode plugin registration
+
+// 夹具单测：registerOpencodePlugin/unregisterOpencodePlugin 接受任意
+// configURL，全程只在临时目录操作，绝不碰用户真实的 opencode.json。
+
+/// 临时目录里造一份迷你 opencode.json：两个既有 plugin 条目
+/// （一个远端名、一个他人 file:// 本地插件）外加一个无关顶层键。
+private func makeOpencodeFixture() throws -> (dir: URL, config: URL) {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("yierpet-test-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(
+        at: dir, withIntermediateDirectories: true)
+    let config = dir.appendingPathComponent("opencode.json")
+    let fixture: [String: Any] = [
+        "plugin": ["some-existing-plugin", "file:///tmp/other-local.ts"],
+        "other": 1,
+    ]
+    try JSONSerialization.data(withJSONObject: fixture).write(to: config)
+    return (dir, config)
+}
+
+private func pluginList(_ root: [String: Any]) -> [String] {
+    root["plugin"] as? [String] ?? []
+}
+
+@Test func registerOpencodePluginAppendsEntryKeepingExisting() throws {
+    let fixture = try makeOpencodeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.dir) }
+    try AgentHookInstaller.registerOpencodePlugin(
+        configURL: fixture.config, pluginPath: "/tmp/fake/yierpet.ts")
+
+    let root = try loadRoot(fixture.config)
+    #expect(pluginList(root) == [
+        "some-existing-plugin",
+        "file:///tmp/other-local.ts",
+        "file:///tmp/fake/yierpet.ts",
+    ])
+    // 无关顶层键未动
+    #expect(root["other"] as? Int == 1)
+    // 写前备份已生成
+    #expect(FileManager.default.fileExists(
+        atPath: fixture.config.path + ".yierpet-bak"))
+}
+
+@Test func registerOpencodePluginIsIdempotent() throws {
+    let fixture = try makeOpencodeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.dir) }
+    try AgentHookInstaller.registerOpencodePlugin(
+        configURL: fixture.config, pluginPath: "/tmp/fake/yierpet.ts")
+    try AgentHookInstaller.registerOpencodePlugin(
+        configURL: fixture.config, pluginPath: "/tmp/fake/yierpet.ts")
+
+    let root = try loadRoot(fixture.config)
+    let list = pluginList(root)
+    #expect(list.filter { $0.contains("yierpet") }.count == 1)
+    // 既有条目仍只有一份
+    #expect(list.count == 3)
+}
+
+@Test func unregisterOpencodePluginRemovesOwnEntryOnly() throws {
+    let fixture = try makeOpencodeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.dir) }
+    try AgentHookInstaller.registerOpencodePlugin(
+        configURL: fixture.config, pluginPath: "/tmp/fake/yierpet.ts")
+    AgentHookInstaller.unregisterOpencodePlugin(configURL: fixture.config)
+
+    let root = try loadRoot(fixture.config)
+    #expect(pluginList(root) == [
+        "some-existing-plugin", "file:///tmp/other-local.ts",
+    ])
+    #expect(root["other"] as? Int == 1)
+}

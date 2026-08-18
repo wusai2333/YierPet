@@ -12,6 +12,11 @@ enum AgentHookInstaller {
         "UserPromptSubmit", "PostToolUseFailure", "SessionEnd",
     ]
 
+    static let opencodePluginURL = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent(".config/opencode/plugins/yierpet.ts")
+    static let ompExtensionURL = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent(".omp/agent/extensions/yierpet-status.ts")
+
     private static let script = """
     #!/bin/sh
     # YierPet agent hook forwarder — forwards hook stdin JSON to YierPet.
@@ -27,6 +32,111 @@ enum AgentHookInstaller {
     exit 0
 
     """
+
+    private static let opencodePluginSource = #"""
+    // YierPet agent sentinel — forwards opencode status to YierPet.
+    // Endpoint file is written by YierPet on start; silent no-op if absent.
+    import { readFileSync } from "node:fs";
+    import { homedir } from "node:os";
+
+    function endpoint(): string | null {
+      try {
+        const url = readFileSync(
+          `${homedir()}/.yierpet/endpoint`, "utf8").trim();
+        return url || null;
+      } catch {
+        return null;
+      }
+    }
+
+    function post(hook: string, cwd: string): void {
+      const url = endpoint();
+      if (!url) return;
+      fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-YierPet-Tool": "opencode",
+          "X-YierPet-Hook": hook,
+          "X-YierPet-Cwd": cwd,
+        },
+        body: "{}",
+        signal: AbortSignal.timeout(1000),
+      }).catch(() => {});
+    }
+
+    export const YierPetPlugin = async (ctx: { directory?: string }) => {
+      const directory = ctx?.directory || process.cwd();
+      return {
+        event: async ({ event }: { event: { type: string } }) => {
+          switch (event?.type) {
+            case "session.idle":
+              post("Stop", directory);
+              break;
+            case "session.error":
+              post("PostToolUseFailure", directory);
+              break;
+            case "message.updated":
+              post("PostToolUse", directory);
+              break;
+          }
+        },
+        "permission.ask": async () => {
+          post("PermissionRequest", directory);
+        },
+      };
+    };
+    """#
+
+    private static let ompExtensionSource = #"""
+    // YierPet agent sentinel — forwards omp/pi status to YierPet.
+    // Same pattern as orca-agent-status.ts: endpoint file + fire-and-forget.
+    const HOOK_POST_TIMEOUT_MS = 1000
+
+    function readEndpoint(): string | null {
+      try {
+        const fs = require('fs')
+        const url = String(
+          fs.readFileSync(`${process.env.HOME}/.yierpet/endpoint`, 'utf8')
+        ).trim()
+        return url || null
+      } catch {
+        return null
+      }
+    }
+
+    function post(hookEventName: string): void {
+      const url = readEndpoint()
+      if (!url) return
+      const controller =
+        typeof AbortController !== 'undefined' ? new AbortController() : null
+      const timeout = setTimeout(
+        () => controller?.abort(), HOOK_POST_TIMEOUT_MS)
+      if (typeof timeout.unref === 'function') timeout.unref()
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-YierPet-Tool': 'omp',
+          'X-YierPet-Hook': hookEventName,
+          'X-YierPet-Cwd': process.cwd(),
+        },
+        body: '{}',
+        ...(controller ? { signal: controller.signal } : {}),
+      }).catch(() => {}).finally(() => clearTimeout(timeout))
+    }
+
+    export default function (pi): void {
+      pi.on('agent_start', () => post('UserPromptSubmit'))
+      pi.on('tool_execution_start', () => post('PostToolUse'))
+      pi.on('tool_execution_end', () => post('PostToolUse'))
+      pi.on('message_end', (event) => {
+        if (event?.message?.role === 'assistant') post('PostToolUse')
+      })
+      pi.on('agent_settled', () => post('Stop'))
+      pi.on('agent_end', () => post('Stop'))
+    }
+    """#
 
     static func writeScript() {
         try? FileManager.default.createDirectory(
@@ -116,6 +226,70 @@ enum AgentHookInstaller {
         }
     }
 
+    // MARK: - opencode plugin / omp extension
+
+    /// Testable layer behind installOpencodePlugin(): reads the
+    /// opencode.json at configURL, backs it up, replaces any yierpet
+    /// plugin entry with a file:// entry for pluginPath, writes back.
+    static func registerOpencodePlugin(
+        configURL: URL, pluginPath: String
+    ) throws {
+        guard let data = try? Data(contentsOf: configURL),
+              var root = (try? JSONSerialization.jsonObject(with: data))
+                  as? [String: Any]
+        else { throw NSError(domain: "yierpet", code: 2) }
+        backup(configURL)
+        var plugins = root["plugin"] as? [String] ?? []
+        plugins.removeAll { $0.contains("yierpet") }
+        plugins.append("file://\(pluginPath)")
+        root["plugin"] = plugins
+        try write(root, to: configURL)
+    }
+
+    static func installOpencodePlugin() throws {
+        let pluginDir = opencodePluginURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: pluginDir, withIntermediateDirectories: true)
+        try opencodePluginSource.data(using: .utf8)?
+            .write(to: opencodePluginURL)
+        let configURL = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".config/opencode/opencode.json")
+        try registerOpencodePlugin(
+            configURL: configURL, pluginPath: opencodePluginURL.path)
+    }
+
+    static func unregisterOpencodePlugin(configURL: URL) {
+        guard let data = try? Data(contentsOf: configURL),
+              var root = (try? JSONSerialization.jsonObject(with: data))
+                  as? [String: Any],
+              var plugins = root["plugin"] as? [String]
+        else { return }
+        let before = plugins.count
+        plugins.removeAll { $0.contains("yierpet") }
+        guard plugins.count != before else { return }
+        root["plugin"] = plugins
+        try? write(root, to: configURL)
+    }
+
+    static func uninstallOpencodePlugin() {
+        try? FileManager.default.removeItem(at: opencodePluginURL)
+        let configURL = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".config/opencode/opencode.json")
+        unregisterOpencodePlugin(configURL: configURL)
+    }
+
+    static func installOmpExtension() throws {
+        let extensionDir = ompExtensionURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: extensionDir, withIntermediateDirectories: true)
+        try ompExtensionSource.data(using: .utf8)?
+            .write(to: ompExtensionURL)
+    }
+
+    static func uninstallOmpExtension() {
+        try? FileManager.default.removeItem(at: ompExtensionURL)
+    }
+
     // MARK: - Orchestration
 
     static func installAll() -> String {
@@ -135,6 +309,18 @@ enum AgentHookInstaller {
                 failed.append(tool.rawValue)
             }
         }
+        do {
+            try installOpencodePlugin()
+            ok.append("opencode")
+        } catch {
+            failed.append("opencode")
+        }
+        do {
+            try installOmpExtension()
+            ok.append("omp")
+        } catch {
+            failed.append("omp")
+        }
         var summary = "钩子已安装：\(ok.joined(separator: "、"))"
         if !failed.isEmpty {
             summary += "；失败：\(failed.joined(separator: "、"))"
@@ -151,6 +337,8 @@ enum AgentHookInstaller {
         for path in paths {
             try? uninstallSettingsHooks(settingsPath: path)
         }
+        uninstallOpencodePlugin()
+        uninstallOmpExtension()
         try? FileManager.default.removeItem(at: scriptURL)
         try? FileManager.default.removeItem(at: AgentServer.endpointURL)
         return "Agent 钩子已卸载"
