@@ -286,7 +286,7 @@ final class ReminderCenter {
                 .weekOfYear, from: Date())
         case .ideOvertime:
             ideWorkSeconds = 0
-        default:
+        case .agentNeedsConfirm, .agentDone, .agentError:
             break
         }
         lastAnyFire = Date()

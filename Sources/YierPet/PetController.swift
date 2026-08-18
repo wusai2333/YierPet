@@ -824,7 +824,7 @@ extension PetController: ReminderCenterDelegate {
                 playStickerTags(["happy", "exercise"], loops: 3)
             case .ideOvertime:
                 playStickerTags(["exercise", "tired"], loops: 3)
-            default:
+            case .agentNeedsConfirm, .agentDone, .agentError:
                 break
             }
             return
@@ -868,7 +868,7 @@ extension PetController: ReminderCenterDelegate {
             playOnce(.jumping, loops: 2)
         case .ideOvertime:
             playOnce(.jumping, loops: 3)
-        default:
+        case .agentNeedsConfirm, .agentDone, .agentError:
             break
         }
     }
