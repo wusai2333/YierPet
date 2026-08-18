@@ -82,7 +82,10 @@ final class AgentCenter {
 
     private func handle(_ event: AgentEvent) {
         guard isEnabled, isEnabled(event.tool) else { return }
-        if let alert = store.apply(event, at: Date()) {
+        let detail = AgentPayloadSummary.summary(
+            tool: event.tool, hook: event.hook, payload: event.payload,
+            cwd: event.cwd)
+        if let alert = store.apply(event, detail: detail, at: Date()) {
             fire(alert)
         }
     }
@@ -137,8 +140,12 @@ final class AgentCenter {
 
     static func message(for alert: AgentAlert) -> String {
         let template = messages[alert.kind]?.randomElement() ?? ""
-        return template
+        var text = template
             .replacingOccurrences(of: "{tool}", with: alert.tool.rawValue)
             .replacingOccurrences(of: "{proj}", with: alert.project)
+        if let detail = alert.detail, !detail.isEmpty {
+            text += "\n『\(detail)』"
+        }
+        return text
     }
 }

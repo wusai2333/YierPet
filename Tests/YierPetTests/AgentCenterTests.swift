@@ -37,3 +37,15 @@ private final class SpyDelegate: AgentCenterDelegate {
     center.tick(at: Date().addingTimeInterval(243))
     #expect(spy.fired == [.agentNeedsConfirm, .agentNeedsConfirm])
 }
+
+@Test func messageIncludesDetailLine() {
+    let withDetail = AgentCenter.message(
+        for: AgentAlert(
+            kind: .needsConfirm, tool: .qwen, project: "proj",
+            detail: "shell：ls -la"))
+    #expect(withDetail.contains("『shell：ls -la』"))
+    #expect(withDetail.contains("\n"))
+    let without = AgentCenter.message(
+        for: AgentAlert(kind: .done, tool: .qwen, project: "proj"))
+    #expect(!without.contains("『"))
+}
