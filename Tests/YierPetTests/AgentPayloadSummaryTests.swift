@@ -97,6 +97,33 @@ private func payload(_ json: String) -> Data { Data(json.utf8) }
                 == "model overloaded")
     }
 
+    // MARK: dsh sentinel 携带的 body
+
+    @Test func dshStopCarriesText() {
+        let out = AgentPayloadSummary.summary(
+            tool: .dsh, hook: "Stop",
+            payload: payload(#"{"text":"接入完成，验收通过"}"#), cwd: "/w")
+        #expect(out == "接入完成，验收通过")
+    }
+
+    @Test func dshFailureAndPermissionAndNotification() {
+        #expect(
+            AgentPayloadSummary.summary(
+                tool: .dsh, hook: "PostToolUseFailure",
+                payload: payload(#"{"error":"boom: exit 3"}"#), cwd: "/w")
+                == "boom: exit 3")
+        #expect(
+            AgentPayloadSummary.summary(
+                tool: .dsh, hook: "PermissionRequest",
+                payload: payload(#"{"message":"bash: needs write"}"#), cwd: "/w")
+                == "bash: needs write")
+        #expect(
+            AgentPayloadSummary.summary(
+                tool: .dsh, hook: "Notification",
+                payload: payload(#"{"message":"dsh 需要确认"}"#), cwd: "/w")
+                == "dsh 需要确认")
+    }
+
     @Test func invalidJSONAndUnknownHookReturnNil() {
         #expect(
             AgentPayloadSummary.summary(

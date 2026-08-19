@@ -4,7 +4,7 @@
 
 纯 Swift + AppKit 原生实现，**零第三方依赖、零额外权限、不起子进程、一条命令构建**（可选的 Agent 哨兵会监听一个仅本机回环的事件端口）。
 
-仓库：[gitee.com/cat_10/YierPet](https://gitee.com/cat_10/YierPet) · 图文教程：[docs/tutorial/index.html](docs/tutorial/index.html)
+仓库：[github.com/wusai2333/YierPet](https://github.com/wusai2333/YierPet)（镜像：[gitee.com/cat_10/YierPet](https://gitee.com/cat_10/YierPet)）· 图文教程：[docs/tutorial/index.html](docs/tutorial/index.html)
 
 ![动作总览](docs/contact-sheet.png)
 
@@ -20,7 +20,7 @@
 | 健康提醒 | 久坐 / 喝水 / 深夜关怀 / 摸鱼检测，四项独立开关（见下表） |
 | 系统哨兵 | CPU 红温 / 内存压力 / 电量 / 磁盘空间，异常时才冒气泡，五项独立开关（见下表） |
 | 陪伴模式 | 早晨 / 午饭 / 下午茶 / 周五 / 编码久战，五项节律问候，独立开关（见下节） |
-| Agent 哨兵 | 监听 qwen / qodercli / opencode / omp / omo 五个 agent 工具，等确认 / 报错 / 完成时气泡提醒，菜单实时展示会话状态；顺带隐藏 dsh 内置宠物（见下节） |
+| Agent 哨兵 | 监听 qwen / qodercli / opencode / omp / omo / dsh 六个 agent 工具，等确认 / 报错 / 完成时气泡提醒（带摘要），菜单实时展示会话状态（见下节） |
 | 抛掷物理 | 拖住快速甩出，抛物线飞行、撞墙落地反弹；摔狠了会播放生气表情 |
 | 零权限 | 不申请辅助功能、不申请屏幕录制，全部使用公开系统 API |
 
@@ -101,16 +101,27 @@
 
 | 能力 | 说明 |
 | --- | --- |
-| 状态提醒 | qwen / qodercli（官方 hook）、opencode（插件）、omp / omo（扩展）接入事件上报：agent 等确认、报错、完成一轮时气泡 + 动作 + 提示音（提示音可关） |
+| 状态提醒 | qwen / qodercli（官方 hook）、opencode（插件）、omp / omo（扩展）、dsh（Cordis 插件）接入事件上报：agent 等确认、报错、完成一轮时气泡 + 动作 + 提示音（提示音可关） |
 | 内容摘要 | 提醒气泡附带会话摘要：等确认显示要确认什么、完成显示 agent 最后回复片段、报错显示错误信息；截取原文前 60 字，仅本机处理 |
 | 状态展示 | 菜单实时列出每个会话：干活中 / 等确认 / 已完成，久无动静的会话自动清掉 |
-| dsh 取代 | 隐藏 dsh 内置宠物（鲸鱼娘），由一二接管陪伴 |
 | 本机回环 | 只监听 127.0.0.1 上的一个最小 HTTP 端口收事件：无网络权限请求、不起子进程、无第三方依赖 |
 | 静默兜底 | YierPet 未运行时钩子静默失败，不影响 agent 本身；安装自动备份原配置，卸载只删 yierpet 自己的条目 |
 
-使用：右键 → Agent 哨兵 →「安装 Agent 钩子」，卸载同样一键。
+使用：右键 → Agent 哨兵 →「安装 Agent 钩子」，卸载同样一键（覆盖 qwen / qodercli / opencode / omp / omo）。
 
-## 安装（Gitee · 两种方式）
+**dsh（DeepSeek Harness）** 走独立的 Cordis 插件，不在这个一键安装里：
+
+```bash
+dsh plugin --profile web add github:wusai2333/dsh-yierpet-sentinel
+# 用 TUI 的话同样装进 dsh-tui profile；装完重启 dsh 生效
+```
+
+插件仓库：[dsh-yierpet-sentinel](https://github.com/wusai2333/dsh-yierpet-sentinel)
+（零依赖、fire-and-forget：1 秒超时、全错误静默、YierPet 没运行直接跳过，绝不阻塞 dsh；
+本仓库 `integrations/dsh-sentinel/` 内也保留一份源码）。
+配合隐藏 dsh 内置宠物（`~/.dsh/settings.yaml` 里 `pet.visible: false`），由一二接管陪伴。
+
+## 安装（两种方式）
 
 **环境要求**：macOS 13（Ventura）或更高版本。
 
@@ -118,7 +129,7 @@
 
 不用 Git，不用编译，**解压后打开即可**。
 
-1. 打开 [Gitee Releases](https://gitee.com/cat_10/YierPet/releases)
+1. 打开 [Releases](https://gitee.com/cat_10/YierPet/releases)（当前托管在 Gitee 镜像，GitHub 侧后续同步）
 2. 下载 **YierPet-mac.zip**
 3. 解压到任意文件夹（建议拖到「应用程序」），双击 **YierPet.app**
 
@@ -135,7 +146,7 @@ xcode-select --install
 ```
 
 ```bash
-git clone https://gitee.com/cat_10/YierPet.git
+git clone https://github.com/wusai2333/YierPet.git
 cd YierPet
 ./build.sh
 open build/YierPet.app
@@ -144,7 +155,7 @@ open build/YierPet.app
 国内若 GitHub 较慢，也可从 GitHub 镜像克隆：
 
 ```bash
-git clone https://gh-proxy.com/https://github.com/xiaojieshi-bot/YierPet.git
+git clone https://gh-proxy.com/https://github.com/wusai2333/YierPet.git
 ```
 
 不需要完整 Xcode，不需要任何第三方依赖。

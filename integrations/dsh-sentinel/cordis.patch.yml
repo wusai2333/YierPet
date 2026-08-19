@@ -1,0 +1,4 @@
+# dsh-yierpet-sentinel bundle patch: one host-side listener row.
+- insert:
+    - id: yierpet-sentinel
+      name: dsh-yierpet-sentinel

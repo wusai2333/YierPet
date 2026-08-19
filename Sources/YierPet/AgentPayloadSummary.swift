@@ -17,15 +17,18 @@ enum AgentPayloadSummary {
         guard let payload, !payload.isEmpty else { return nil }
         let raw: String?
         switch (tool, hook) {
-        case (.qwen, "Notification"), (.qodercli, "Notification"):
+        case (.qwen, "Notification"), (.qodercli, "Notification"),
+             (.dsh, "Notification"):
             raw = stringValue(in: payload, key: "message")
-        case (.qwen, "PermissionRequest"), (.qodercli, "PermissionRequest"):
+        case (.qwen, "PermissionRequest"), (.qodercli, "PermissionRequest"),
+             (.dsh, "PermissionRequest"):
             raw = permissionSummary(payload)
         case (.qwen, "Stop"), (.qodercli, "Stop"):
             raw = transcriptSummary(payload)
-        case (.qwen, "PostToolUseFailure"), (.qodercli, "PostToolUseFailure"):
+        case (.qwen, "PostToolUseFailure"), (.qodercli, "PostToolUseFailure"),
+             (.dsh, "PostToolUseFailure"):
             raw = firstString(payload, keys: ["error", "message", "tool_response"])
-        case (.omp, "Stop"), (.omo, "Stop"), (.opencode, "Stop"):
+        case (.dsh, "Stop"), (.omp, "Stop"), (.omo, "Stop"), (.opencode, "Stop"):
             raw = stringValue(in: payload, key: "text")
         case (.opencode, "PermissionRequest"):
             raw = stringValue(in: payload, key: "permission")

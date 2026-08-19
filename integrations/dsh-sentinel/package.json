@@ -1,0 +1,24 @@
+{
+  "name": "dsh-yierpet-sentinel",
+  "version": "0.1.0",
+  "description": "Forwards dsh lifecycle events to the YierPet desktop-pet sentinel (fire-and-forget, never blocks dsh).",
+  "type": "module",
+  "main": "./index.js",
+  "exports": "./index.js",
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "yierpet"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
