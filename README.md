@@ -4,7 +4,7 @@
 
 纯 Swift + AppKit 原生实现，**零第三方依赖、零额外权限、不起子进程、一条命令构建**（可选的 Agent 哨兵会监听一个仅本机回环的事件端口）。
 
-仓库：[github.com/wusai2333/YierPet](https://github.com/wusai2333/YierPet)（镜像：[gitee.com/cat_10/YierPet](https://gitee.com/cat_10/YierPet)）· 图文教程：[docs/tutorial/index.html](docs/tutorial/index.html)
+仓库：[github.com/wusai2333/YierPet](https://github.com/wusai2333/YierPet) · 图文教程：[docs/tutorial/index.html](docs/tutorial/index.html)
 
 ![动作总览](docs/contact-sheet.png)
 
@@ -229,6 +229,10 @@ YierPet/
 ## 形象来源
 
 宠物形象由黄小B创作，取一张静态图经 ChatGPT 生成 9 行动画帧总表，再用本仓库配套流水线切分、镜像、校验、合成为精灵图集（基于 [openai/skills](https://github.com/openai/skills) 的 hatch-pet 图集契约）。
+
+## 致谢
+
+本项目基于原作者 **xiaojieshi** 的 [xiaojieshi-bot/YierPet](https://github.com/xiaojieshi-bot/YierPet)（Gitee：[cat_10/YierPet](https://gitee.com/cat_10/YierPet)）继续开发——一二、布布的形象与动画素材、桌宠本体与各类哨兵的原始设计均出自原仓库，在此致谢；本仓库在其基础上增加了 dsh 的 Agent 哨兵接入与若干修复。代码按 MIT 许可证发布，版权归属以 [LICENSE](LICENSE) 为准；二次分发请保留原作者署名。
 
 ## 许可证
 
