@@ -12,7 +12,7 @@ let cltDevUsrLib =
 
 let package = Package(
     name: "YierPet",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
             name: "YierPet",
