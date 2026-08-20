@@ -123,7 +123,7 @@ dsh plugin --profile web add github:wusai2333/dsh-yierpet-sentinel
 
 ## 安装（两种方式）
 
-**环境要求**：macOS 13（Ventura）或更高版本。
+**环境要求**：macOS 15（Sequoia）或更高版本（本分支即面向 macOS 15+；main 分支产物要求构建机同版本系统）。
 
 ### 方法一：Release 压缩包（推荐）
 

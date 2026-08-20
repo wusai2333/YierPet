@@ -6,8 +6,13 @@ cd "$(dirname "$0")"
 APP=build/YierPet.app
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
+# 部署目标 macOS 15.0：不指定 -target 时 swiftc 会用宿主系统版本（如 26），
+# 产物就无法在旧系统上运行。架构跟随构建机（arm64 / x86_64）。
+MIN_MACOS=15.0
+
 echo "正在编译..."
-swiftc -O Sources/YierPet/*.swift -o "$APP/Contents/MacOS/YierPet"
+swiftc -O -target "$(uname -m)-apple-macos${MIN_MACOS}" \
+  Sources/YierPet/*.swift -o "$APP/Contents/MacOS/YierPet"
 
 cp Info.plist "$APP/Contents/Info.plist"
 cp Sources/YierPet/Resources/spritesheet.webp "$APP/Contents/Resources/"
