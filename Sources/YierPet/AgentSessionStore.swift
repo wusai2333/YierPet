@@ -112,8 +112,10 @@ struct AgentSessionStore {
                     kind: .done, tool: event.tool,
                     project: Self.project(of: event.cwd), detail: detail)
             }
-        case "PostToolUseFailure":
-            session.state = .working
+        case "PostToolUseFailure", "StopFailure":
+            // StopFailure（qwen/qodercli 的 API 错误终止）回合已结束；
+            // PostToolUseFailure 只是工具出错，agent 还在干活。
+            session.state = event.hook == "StopFailure" ? .done : .working
             if now.timeIntervalSince(session.lastErrorAlert)
                 >= Self.errorThrottle {
                 session.lastErrorAlert = now

@@ -213,3 +213,32 @@ private func payload(_ json: String) -> Data { Data(json.utf8) }
         #expect(out == "干完了")
     }
 }
+
+    // MARK: 限流 / 服务端错误提醒
+
+    @Test func stopFailureCarriesApiError() {
+        let out = AgentPayloadSummary.summary(
+            tool: .qwen, hook: "StopFailure",
+            payload: payload(
+                #"{"error":"RATE_LIMIT","error_details":"429 rate limit exceeded, retrying later","last_assistant_message":"..."}"#),
+            cwd: "/w")
+        #expect(out == "429 rate limit exceeded, retrying later")
+        let fallback = AgentPayloadSummary.summary(
+            tool: .qodercli, hook: "StopFailure",
+            payload: payload(#"{"error":"SERVER_ERROR"}"#), cwd: "/w")
+        #expect(fallback == "SERVER_ERROR")
+    }
+
+    @Test func piToolFailureSummary() {
+        #expect(
+            AgentPayloadSummary.summary(
+                tool: .omp, hook: "PostToolUseFailure",
+                payload: payload(#"{"error":"模型报错：过载，30s 后重试 (1/3)"}"#),
+                cwd: "/w")
+                == "模型报错：过载，30s 后重试 (1/3)")
+        #expect(
+            AgentPayloadSummary.summary(
+                tool: .omo, hook: "PostToolUseFailure",
+                payload: payload(#"{"error":"upstream 503"}"#), cwd: "/w")
+                == "upstream 503")
+    }

@@ -7,8 +7,10 @@ enum AgentHookInstaller {
     static let scriptURL = AgentServer.dir.appendingPathComponent("hook.sh")
 
     /// Claude-Code-style hook events registered for settings.json tools.
+    /// StopFailure = the turn ended on an API error (rate limit / server),
+    /// fires instead of Stop — that is the model-error reminder for these two.
     static let hookEvents = [
-        "PermissionRequest", "Notification", "Stop",
+        "PermissionRequest", "Notification", "Stop", "StopFailure",
         "UserPromptSubmit", "PostToolUseFailure", "SessionEnd",
     ]
 
@@ -100,6 +102,16 @@ enum AgentHookInstaller {
               post("PostToolUseFailure", directory, { error: text });
               break;
             }
+            case "session.status": {
+              // Rate-limit / transient-error retry wait ("retrying in ...").
+              const status = event?.properties?.status;
+              if (status?.type === "retry" && status?.message) {
+                post("PostToolUseFailure", directory, {
+                  error: String(status.message),
+                });
+              }
+              break;
+            }
             case "message.updated":
             case "message.part.updated":
               trackAssistantText(event);
@@ -180,8 +192,20 @@ enum AgentHookInstaller {
         if (text) lastAssistantText = text
         post('PostToolUse')
       })
+      // Model rate-limit / transient error: an auto retry is starting.
+      // YierPet's 60s error throttle absorbs retry bursts.
+      pi.on('auto_retry_start', (event) => {
+        const delayS = Math.max(1, Math.round((event?.delayMs ?? 0) / 1000))
+        post('PostToolUseFailure', {
+          error: `模型报错：${event?.errorMessage ?? '未知'}，${delayS}s 后重试 (${event?.attempt ?? '?'}/${event?.maxAttempts ?? '?'})`,
+        })
+      })
       pi.on('agent_settled', () => post('Stop', { text: lastAssistantText }))
-      pi.on('agent_end', () => post('Stop', { text: lastAssistantText }))
+      pi.on('agent_end', (event) => {
+        // willContinue: an auto retry is scheduled — not a real settle yet.
+        if (event?.willContinue) return
+        post('Stop', { text: lastAssistantText })
+      })
     }
     """#
 
@@ -249,8 +273,20 @@ enum AgentHookInstaller {
         if (text) lastAssistantText = text
         post('PostToolUse')
       })
+      // Model rate-limit / transient error: an auto retry is starting.
+      // YierPet's 60s error throttle absorbs retry bursts.
+      pi.on('auto_retry_start', (event) => {
+        const delayS = Math.max(1, Math.round((event?.delayMs ?? 0) / 1000))
+        post('PostToolUseFailure', {
+          error: `模型报错：${event?.errorMessage ?? '未知'}，${delayS}s 后重试 (${event?.attempt ?? '?'}/${event?.maxAttempts ?? '?'})`,
+        })
+      })
       pi.on('agent_settled', () => post('Stop', { text: lastAssistantText }))
-      pi.on('agent_end', () => post('Stop', { text: lastAssistantText }))
+      pi.on('agent_end', (event) => {
+        // willContinue: an auto retry is scheduled — not a real settle yet.
+        if (event?.willContinue) return
+        post('Stop', { text: lastAssistantText })
+      })
     }
     """#
 

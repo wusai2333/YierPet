@@ -25,8 +25,12 @@ enum AgentPayloadSummary {
             raw = permissionSummary(payload)
         case (.qwen, "Stop"), (.qodercli, "Stop"):
             raw = transcriptSummary(payload)
+        case (.qwen, "StopFailure"), (.qodercli, "StopFailure"):
+            // API 错误终止（限流/服务端）：error_details 是可读错误信息
+            raw = firstString(payload, keys: ["error_details", "error"])
         case (.qwen, "PostToolUseFailure"), (.qodercli, "PostToolUseFailure"),
-             (.dsh, "PostToolUseFailure"):
+             (.dsh, "PostToolUseFailure"), (.omp, "PostToolUseFailure"),
+             (.omo, "PostToolUseFailure"):
             raw = firstString(payload, keys: ["error", "message", "tool_response"])
         case (.dsh, "Stop"), (.omp, "Stop"), (.omo, "Stop"), (.opencode, "Stop"):
             raw = stringValue(in: payload, key: "text")

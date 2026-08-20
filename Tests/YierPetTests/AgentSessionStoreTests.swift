@@ -107,3 +107,15 @@ private func event(
     let nudges2 = store.dueNudges(at: t0 + 310 + 121)
     #expect(nudges2.first?.detail == nil)
 }
+
+@Test func stopFailureAlertsErrorAndEndsTurn() {
+    var store = AgentSessionStore()
+    _ = store.apply(event("UserPromptSubmit"), at: t0)
+    let alert = store.apply(event("StopFailure"), at: t0 + 5)
+    #expect(alert?.kind == .error)
+    // 回合已终止：随后的 Stop 不再报完成
+    #expect(store.apply(event("Stop"), at: t0 + 10) == nil)
+    // 错误节流同样约束 StopFailure
+    _ = store.apply(event("UserPromptSubmit"), at: t0 + 20)
+    #expect(store.apply(event("StopFailure"), at: t0 + 30) == nil)
+}
