@@ -9,6 +9,7 @@
  *   turn/start            → UserPromptSubmit        (state reset)
  *   tool/result           → PostToolUse heartbeat, or PostToolUseFailure {error}
  *   approval/asked        → PermissionRequest {message}
+ *   llm/retry             → PostToolUseFailure {error} (model rate-limit/error, retrying)
  *   turn/end completed    → Stop {text: last assistant reply}
  *   turn/end error        → PostToolUseFailure {error}
  *   session/disposed      → SessionEnd
@@ -85,6 +86,21 @@ export function eventToPost(event) {
     case 'approval/asked': {
       const message = clip(`${data?.toolName ?? 'tool'}${data?.reason ? `: ${data.reason}` : ''}`, ERROR_CLIP)
       return { hook: 'PermissionRequest', body: { message } }
+    }
+    case 'llm/retry': {
+      // Model-side failure the loop is retrying (rate limit, server, timeout):
+      // surface as an error bubble — YierPet's 60s throttle keeps backoff
+      // bursts (retries every few seconds) to at most one bubble per minute.
+      const failure = data?.failure
+      const delayS = Math.max(1, Math.round((data?.delayMs ?? 0) / 1000))
+      const attempt = typeof data?.retry === 'number'
+        ? ` (${data.retry}${typeof data.maxRetries === 'number' ? `/${data.maxRetries}` : ''})`
+        : ''
+      const error = clip(
+        `模型报错 ${failure?.code ?? 'UNKNOWN'}${failure?.message ? `：${failure.message}` : ''}，${delayS}s 后重试${attempt}`,
+        ERROR_CLIP,
+      )
+      return { hook: 'PostToolUseFailure', body: { error } }
     }
     case 'turn/end': {
       const reason = data?.reason

@@ -11,6 +11,7 @@ dsh 侧唯一改动就是这个 Cordis 插件——它监听 dsh 的 `session/ev
 | `turn/start` | `UserPromptSubmit` | — |
 | `tool/result` | `PostToolUse`（心跳）/ `PostToolUseFailure` | `{error}` |
 | `approval/asked` | `PermissionRequest` | `{message}` |
+| `llm/retry` | `PostToolUseFailure`（限流/模型报错，重试中） | `{error}` |
 | `turn/end` completed | `Stop` | `{text: 最后一条回复}` |
 | `turn/end` error | `PostToolUseFailure` | `{error}` |
 | `session/disposed` | `SessionEnd` | — |

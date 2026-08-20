@@ -33,6 +33,20 @@ test('approval/asked asks the human with tool + reason', () => {
   assert.deepEqual(mapped, { hook: 'PermissionRequest', body: { message: 'bash: needs write' } })
 })
 
+test('llm/retry reports model failures being retried (rate limit & co)', () => {
+  const mapped = eventToPost({
+    type: 'llm/retry',
+    data: {
+      retryId: 'r1', turn: 1, step: 1, provider: 'idealab', mode: 'normal',
+      retry: 2, maxRetries: 12, delayMs: 30000,
+      failure: { message: 'rate limit exceeded', code: 'RATE_LIMIT' },
+    },
+  })
+  assert.deepEqual(mapped, { hook: 'PostToolUseFailure', body: { error: '模型报错 RATE_LIMIT：rate limit exceeded，30s 后重试 (2/12)' } })
+  const bare = eventToPost({ type: 'llm/retry', data: { delayMs: 500, failure: { message: 'boom', code: 'SERVER' } } })
+  assert.deepEqual(bare, { hook: 'PostToolUseFailure', body: { error: '模型报错 SERVER：boom，1s 后重试' } })
+})
+
 test('turn/end: completed stops, error reports, others stay silent', () => {
   assert.deepEqual(eventToPost({ type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } }), { hook: 'Stop', body: { text: '' } })
   const failed = eventToPost({ type: 'turn/end', data: { turn: 1, reason: { kind: 'error', error: { message: 'llm down', code: 'SERVER' } } } })
