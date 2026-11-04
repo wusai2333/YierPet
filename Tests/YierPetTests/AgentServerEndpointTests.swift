@@ -94,3 +94,43 @@ private func waitReady(_ server: AgentServer, seconds: TimeInterval = 5) -> Bool
     #expect(text == server.endpointString)
     #expect(text != "http://127.0.0.1:1/event")
 }
+
+// 守门：跑 swift test 不许动真实的 ~/.yierpet/endpoint。
+// 曾有 5 个服务端用例用默认落盘位置建 server，defer { stop() } 直接删掉真实文件，
+// 六个 agent 的提醒一起静默消失（hook.sh 读不到端点就 exit 0）。
+@Test func serverTestsDoNotTouchLiveEndpointFile() throws {
+    let live = AgentServer.endpointURL
+    let snapshot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("yierpet-live-\(UUID().uuidString)")
+    let existed = FileManager.default.fileExists(atPath: live.path)
+    if existed { try FileManager.default.copyItem(at: live, to: snapshot) }
+    defer {
+        if existed { try? FileManager.default.removeItem(at: live) }
+        if FileManager.default.fileExists(atPath: snapshot.path) {
+            try? FileManager.default.copyItem(
+                at: snapshot, to: live)  // 万一被删，顺带恢复回来
+        }
+        try? FileManager.default.removeItem(at: snapshot)
+    }
+
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("yierpet-isolation-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(
+        at: dir, withIntermediateDirectories: true)
+    let server = AgentServer()
+    server.queue = DispatchQueue(label: "isolation")
+    server.endpointOverride = dir.appendingPathComponent("endpoint")
+    server.start()
+    #expect(waitReady(server))
+    #expect(FileManager.default.fileExists(atPath: dir.path))
+    server.stop()
+    try? FileManager.default.removeItem(at: dir)
+
+    let nowExists = FileManager.default.fileExists(atPath: live.path)
+    #expect(nowExists == existed, "真实 endpoint 文件的存在性被改动了")
+    if existed {
+        let before = try Data(contentsOf: snapshot)
+        let after = try Data(contentsOf: live)
+        #expect(before == after, "真实 endpoint 文件内容被改动了")
+    }
+}
