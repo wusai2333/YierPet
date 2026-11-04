@@ -28,6 +28,15 @@ enum AgentPayloadSummary {
         case (.qwen, "StopFailure"), (.qodercli, "StopFailure"):
             // API 错误终止（限流/服务端）：error_details 是可读错误信息
             raw = firstString(payload, keys: ["error_details", "error"])
+        case (.codex, "Stop"):
+            // codex 没有 StopFailure 事件：API 报错时 Stop 仍会触发，
+            // last_assistant_message 就是错误原文，直接拿它当摘要。
+            raw = firstString(payload, keys: ["last_assistant_message"])
+                ?? transcriptSummary(payload)
+        case (.codex, "PermissionRequest"):
+            raw = permissionSummary(payload)
+        case (.codex, "PostToolUse"):
+            raw = firstString(payload, keys: ["tool_response"])
         case (.qwen, "PostToolUseFailure"), (.qodercli, "PostToolUseFailure"),
              (.dsh, "PostToolUseFailure"), (.omp, "PostToolUseFailure"),
              (.omo, "PostToolUseFailure"):
@@ -152,9 +161,11 @@ enum AgentPayloadSummary {
     private static func firstString(_ payload: Data, keys: [String]) -> String? {
         guard let object = jsonObject(payload) else { return nil }
         for key in keys {
-            if let value = object[key] as? String, !value.isEmpty {
-                return value
-            }
+            // JSON null 会落成 NSNull：必须跳过继续找下一个键，
+            // 否则 codex Stop 里 last_assistant_message:null 会挡住
+            // transcript_path 回退。
+            guard let value = object[key] as? String else { continue }
+            if !value.isEmpty { return value }
         }
         return nil
     }

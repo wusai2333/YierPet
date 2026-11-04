@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Installs/uninstalls agent hooks. Idempotent: own entries are recognized
 /// by the ".yierpet/hook.sh" marker; everything else is left untouched.
@@ -13,6 +14,20 @@ enum AgentHookInstaller {
         "PermissionRequest", "Notification", "Stop", "StopFailure",
         "UserPromptSubmit", "PostToolUseFailure", "SessionEnd",
     ]
+
+    /// Codex CLI 的 hooks.json 只认这份事件表（codex 0.166 实测）。
+    /// Notification / StopFailure / PostToolUseFailure 都不存在，而未知
+    /// 事件键会让整个 hooks.json 解析失败、连带别人的钩子一起失效，
+    /// 所以这里一个都不多加。报错提醒因此退化到 Stop 摘要里带错误原文。
+    static let codexHookEvents = [
+        "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+        "PermissionRequest", "Stop", "SessionEnd",
+    ]
+
+    static let codexSettingsURL = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent(".codex/hooks.json")
+    static let codexConfigURL = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent(".codex/config.toml")
 
     static let opencodePluginURL = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent(".config/opencode/plugins/yierpet.ts")
@@ -298,10 +313,19 @@ enum AgentHookInstaller {
             [.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
     }
 
-    // MARK: - settings.json tools (qwen / qodercli)
+    // MARK: - settings.json tools (qwen / qodercli / codex)
 
     static func installSettingsHooks(
         settingsPath: String, tool: AgentTool
+    ) throws {
+        try installSettingsHooks(
+            settingsPath: settingsPath, tool: tool, events: hookEvents)
+    }
+
+    /// Shared merge-in: own entries are dropped then re-appended per event,
+    /// so existing (foreign) entries keep their position and their trust.
+    private static func installSettingsHooks(
+        settingsPath: String, tool: AgentTool, events: [String]
     ) throws {
         let url = URL(fileURLWithPath: settingsPath)
         guard let data = try? Data(contentsOf: url),
@@ -310,7 +334,7 @@ enum AgentHookInstaller {
         else { throw NSError(domain: "yierpet", code: 1) }
         backup(url)
         var hooks = root["hooks"] as? [String: Any] ?? [:]
-        for eventName in hookEvents {
+        for eventName in events {
             var entries = hooks[eventName] as? [[String: Any]] ?? []
             entries.removeAll(where: isOwnEntry)
             entries.append(ownEntry(tool: tool, event: eventName))
@@ -342,6 +366,287 @@ enum AgentHookInstaller {
         guard changed else { return }
         root["hooks"] = hooks
         try write(root, to: url)
+    }
+
+    // MARK: - codex (Codex CLI: hooks.json + [hooks.state] trust)
+
+    /// codex 只跑「已授信」的用户钩子：授信写在 config.toml 的
+    /// `[hooks.state."<hooks.json 路径>:<snake 事件>:<组>:< handler>"]
+    /// trusted_hash = "sha256:…"`，哈希是钩子身份的规范化 JSON 摘要。
+    /// 我们复刻这个算法，只给自己写的条目授信，所以安装后不必再去
+    /// `/hooks` 逐条确认，也绝不碰别人钩子的授信键。若哪天 codex 改了
+    /// 配方，我们的条目会被静默跳过——一次 `/hooks` 手工确认即可恢复。
+    static func installCodexHooks(
+        settingsPath: String = codexSettingsURL.path,
+        configPath: String = codexConfigURL.path
+    ) throws {
+        try installSettingsHooks(
+            settingsPath: settingsPath, tool: .codex,
+            events: codexHookEvents)
+        writeHookStateTrust(
+            configPath: configPath, trust: codexTrust(settingsPath: settingsPath))
+    }
+
+    static func uninstallCodexHooks(
+        settingsPath: String = codexSettingsURL.path,
+        configPath: String = codexConfigURL.path
+    ) throws {
+        // Read our trust keys BEFORE removing the entries: positional keys
+        // and hashes stop existing once the entries are gone. Only these
+        // exact key+hash pairs are deleted — a foreign hook that shares
+        // hooks.json keeps its own `[hooks.state]` entry untouched.
+        let trust = codexTrust(settingsPath: settingsPath)
+        try uninstallSettingsHooks(settingsPath: settingsPath)
+        removeHookStateTrust(configPath: configPath, trust: trust)
+    }
+
+    /// `[hooks.state]` key → trusted_hash for our own entries.
+    static func codexTrust(settingsPath: String) -> [String: String] {
+        var out: [String: String] = [:]
+        for entry in codexTrustEntries(settingsPath: settingsPath) {
+            out[codexHookStateKey(
+                settingsPath: settingsPath, event: entry.event,
+                group: entry.group, handler: entry.handler)] = entry.hash
+        }
+        return out
+    }
+
+    /// 我们自己那些条目对应的授信键值（组号 = 该事件下的位置）。
+    static func codexTrustEntries(settingsPath: String) -> [
+        (event: String, group: Int, handler: Int, hash: String)
+    ] {
+        guard let data = try? Data(
+            contentsOf: URL(fileURLWithPath: settingsPath)),
+            let root = (try? JSONSerialization.jsonObject(with: data))
+                as? [String: Any],
+            let hooks = root["hooks"] as? [String: Any]
+        else { return [] }
+        var out: [(String, Int, Int, String)] = []
+        for event in codexHookEvents {
+            let entries = hooks[event] as? [[String: Any]] ?? []
+            for (group, entry) in entries.enumerated() where isOwnEntry(entry) {
+                let matcher = entry["matcher"] as? String
+                let handlers = entry["hooks"] as? [[String: Any]] ?? []
+                for (handler, item) in handlers.enumerated() {
+                    out.append((
+                        event, group, handler,
+                        codexTrustedHash(
+                            event: event, matcher: matcher,
+                            handler: item)))
+                }
+            }
+        }
+        return out
+    }
+
+    static func codexHookStateKey(
+        settingsPath: String, event: String, group: Int, handler: Int = 0
+    ) -> String {
+        "\(settingsPath):\(codexSnakeCase(event)):\(group):\(handler)"
+    }
+
+    /// 钩子身份 → codex 的 trusted_hash。规范化规则（0.166 实测对齐）：
+    /// 事件名转 snake_case；matcher 缺省或 "*" 不入库；handler 补齐
+    /// type / timeout（缺省 600）/ async（缺省 false）；JSON 键排序紧凑。
+    static func codexTrustedHash(
+        event: String, matcher: String?, handler: [String: Any]
+    ) -> String {
+        var normalized: [String: Any] = [
+            "type": handler["type"] as? String ?? "command",
+            "command": handler["command"] as? String ?? "",
+            "timeout": handler["timeout"] as? Int ?? 600,
+            "async": handler["async"] as? Bool ?? false,
+        ]
+        if let statusMessage = handler["statusMessage"] as? String {
+            normalized["statusMessage"] = statusMessage
+        }
+        var identity: [String: Any] = ["event_name": codexSnakeCase(event)]
+        if let matcher, matcher != "*" { identity["matcher"] = matcher }
+        identity["hooks"] = [normalized]
+        let digest = SHA256.hash(
+            data: Data(codexCompactJSON(identity).utf8))
+        return "sha256:" + digest.map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    static func codexSnakeCase(_ value: String) -> String {
+        var out = ""
+        for char in value {
+            if char.isUppercase {
+                if !out.isEmpty { out.append("_") }
+                out.append(char.lowercased())
+            } else {
+                out.append(char)
+            }
+        }
+        return out
+    }
+
+    /// 手写紧凑 JSON（键排序）：JSONSerialization 没有紧凑模式，
+    /// 事后 replace ": " 会误伤字符串内容。
+    static func codexCompactJSON(_ value: Any) -> String {
+        switch value {
+        case let string as String:
+            return codexJSONString(string)
+        case let number as Int:
+            return String(number)
+        case let number as Double:
+            return String(number)
+        case let bool as Bool:
+            return bool ? "true" : "false"
+        case is NSNull:
+            return "null"
+        case let array as [Any]:
+            return "[" + array.map(codexCompactJSON).joined(separator: ",") + "]"
+        case let dict as [String: Any]:
+            let parts = dict.keys.sorted().map {
+                codexJSONString($0) + ":" + codexCompactJSON(dict[$0]!)
+            }
+            return "{" + parts.joined(separator: ",") + "}"
+        default:
+            return "null"
+        }
+    }
+
+    private static func codexJSONString(_ value: String) -> String {
+        var out = "\""
+        for char in value.unicodeScalars {
+            switch char {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            default:
+                if char.value < 0x20 {
+                    out += String(
+                        format: "\\u%04x", char.value)
+                } else {
+                    out.unicodeScalars.append(char)
+                }
+            }
+        }
+        return out + "\""
+    }
+
+    // MARK: - [hooks.state] TOML editing (only ever touches our own keys)
+
+    /// Rewrites our trust region: existing blocks for these exact keys are
+    /// dropped first, then a fresh `# yierpet codex hook trust` block is
+    /// appended, so repeated installs stay clean and one-off keys from an
+    /// older layout don't linger.
+    static func writeHookStateTrust(
+        configPath: String, trust: [String: String]
+    ) {
+        let url = URL(fileURLWithPath: configPath)
+        var lines = ((try? String(contentsOf: url, encoding: .utf8)) ?? "")
+            .components(separatedBy: "\n")
+        let keys = Set(trust.keys)
+        lines = pruneHookStateTables(lines) { key, _ in keys.contains(key) }.lines
+        var block = ["", "\(trustMarker) BEGIN"]
+        for key in keys.sorted() {
+            block.append("[hooks.state.\"\(tomlEscape(key))\"]")
+            block.append("trusted_hash = \"\(tomlEscape(trust[key]!))\"")
+        }
+        block.append("\(trustMarker) END")
+        lines.append(contentsOf: block)
+        try? lines.joined(separator: "\n")
+            .data(using: .utf8)?.write(to: url)
+    }
+
+    /// Removes exactly the given key+hash tables (and nothing else), plus
+    /// our marker comments. Returns the number of dropped tables.
+    @discardableResult
+    static func removeHookStateTrust(
+        configPath: String, trust: [String: String]
+    ) -> Int {
+        let url = URL(fileURLWithPath: configPath)
+        guard let text = try? String(
+            contentsOf: url, encoding: .utf8)
+        else { return 0 }
+        let (kept, removed) = pruneHookStateTables(text.components(separatedBy: "\n")) {
+            trust[$0] == $1
+        }
+        try? kept.joined(separator: "\n")
+            .data(using: .utf8)?.write(to: url)
+        return removed
+    }
+
+    static let trustMarker = "# yierpet codex hook trust"
+
+    /// Drops `[hooks.state]` tables whose (key, trusted_hash) satisfies
+    /// `matches`, keeping every other line — including unrelated tables —
+    /// byte-identical.
+    private static func pruneHookStateTables(
+        _ lines: [String], matching: (String, String) -> Bool
+    ) -> (lines: [String], removed: Int) {
+        var out: [String] = []
+        var removed = 0
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            // Our own marker comments vanish together with the region.
+            if trimmed == "\(trustMarker) BEGIN" || trimmed == "\(trustMarker) END" {
+                index += 1
+                continue
+            }
+            guard trimmed.hasPrefix("[hooks.state."),
+                  let key = hookStateKey(from: trimmed) else {
+                out.append(line)
+                index += 1
+                continue
+            }
+            var body: [String] = []
+            var hash: String?
+            var cursor = index + 1
+            while cursor < lines.count {
+                let next = lines[cursor]
+                    .trimmingCharacters(in: .whitespaces)
+                if next.hasPrefix("[") { break }
+                if next.hasPrefix("trusted_hash") {
+                    hash = unquotedValue(from: next)
+                }
+                body.append(lines[cursor])
+                cursor += 1
+            }
+            if matching(key, hash ?? "") {
+                removed += 1
+            } else {
+                out.append(line)
+                out.append(contentsOf: body)
+            }
+            index = cursor
+        }
+        return (out, removed)
+    }
+
+    /// `"path:event:i:j"` out of `[hooks.state."<key>"]`, unescaped.
+    private static func hookStateKey(from header: String) -> String? {
+        guard let firstQuote = header.firstIndex(of: "\"") else { return nil }
+        guard let lastQuote = header.lastIndex(of: "\""),
+              lastQuote > firstQuote else { return nil }
+        return unescapeTomlString(
+            String(header[header.index(after: firstQuote)..<lastQuote]))
+    }
+
+    /// The quoted right-hand side of `trusted_hash = "sha256:…"`.
+    private static func unquotedValue(from line: String) -> String? {
+        guard let equals = line.firstIndex(of: "=") else { return nil }
+        let rhs = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+        guard rhs.hasPrefix("\""), rhs.hasSuffix("\""), rhs.count >= 2 else { return nil }
+        return unescapeTomlString(String(rhs.dropFirst().dropLast()))
+    }
+
+    private static func unescapeTomlString(_ value: String) -> String {
+        value.replacingOccurrences(of: "\\\"", with: "\"")
+            .replacingOccurrences(of: "\\\\", with: "\\")
+    }
+
+    private static func tomlEscape(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     private static func isOwnEntry(_ entry: [String: Any]) -> Bool {
@@ -484,18 +789,47 @@ enum AgentHookInstaller {
 
     // MARK: - Orchestration
 
+    /// codex keeps `[hooks.state]` trust in the config.toml next to the
+    /// hooks file that declares the hooks.
+    static func codexConfigPath(for hooksPath: String) -> String {
+        (hooksPath as NSString).deletingLastPathComponent + "/config.toml"
+    }
+
+    /// Per-tool install dispatch: codex needs its own event table plus the
+    /// config.toml trust region; the rest are plain Claude-style settings.json.
+    static func installHooks(for tool: AgentTool, path: String) throws {
+        switch tool {
+        case .codex:
+            try installCodexHooks(
+                settingsPath: path, configPath: codexConfigPath(for: path))
+        default:
+            try installSettingsHooks(settingsPath: path, tool: tool)
+        }
+    }
+
+    static func uninstallHooks(for tool: AgentTool, path: String) throws {
+        switch tool {
+        case .codex:
+            try uninstallCodexHooks(
+                settingsPath: path, configPath: codexConfigPath(for: path))
+        default:
+            try uninstallSettingsHooks(settingsPath: path)
+        }
+    }
+
     static func installAll() -> String {
         writeScript()
         let home = NSHomeDirectory()
         let targets: [(AgentTool, String)] = [
             (.qwen, "\(home)/.qwen/settings.json"),
             (.qodercli, "\(home)/.qoder/settings.json"),
+            (.codex, codexSettingsURL.path),
         ]
         var ok: [String] = []
         var failed: [String] = []
         for (tool, path) in targets {
             do {
-                try installSettingsHooks(settingsPath: path, tool: tool)
+                try installHooks(for: tool, path: path)
                 ok.append(tool.rawValue)
             } catch {
                 failed.append(tool.rawValue)
@@ -529,12 +863,13 @@ enum AgentHookInstaller {
 
     static func uninstallAll() -> String {
         let home = NSHomeDirectory()
-        let paths = [
-            "\(home)/.qwen/settings.json",
-            "\(home)/.qoder/settings.json",
+        let targets: [(AgentTool, String)] = [
+            (.qwen, "\(home)/.qwen/settings.json"),
+            (.qodercli, "\(home)/.qoder/settings.json"),
+            (.codex, codexSettingsURL.path),
         ]
-        for path in paths {
-            try? uninstallSettingsHooks(settingsPath: path)
+        for (tool, path) in targets {
+            try? uninstallHooks(for: tool, path: path)
         }
         uninstallOpencodePlugin()
         uninstallOmpExtension()

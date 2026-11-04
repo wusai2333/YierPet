@@ -20,7 +20,7 @@
 | 健康提醒 | 久坐 / 喝水 / 深夜关怀 / 摸鱼检测，四项独立开关（见下表） |
 | 系统哨兵 | CPU 红温 / 内存压力 / 电量 / 磁盘空间，异常时才冒气泡，五项独立开关（见下表） |
 | 陪伴模式 | 早晨 / 午饭 / 下午茶 / 周五 / 编码久战，五项节律问候，独立开关（见下节） |
-| Agent 哨兵 | 监听 qwen / qodercli / opencode / omp / omo / dsh 六个 agent 工具，等确认 / 报错 / 完成时气泡提醒（带摘要），菜单实时展示会话状态（见下节） |
+| Agent 哨兵 | 监听 qwen / qodercli / codex / opencode / omp / omo / dsh 七个 agent 工具，等确认 / 报错 / 完成时气泡提醒（带摘要），菜单实时展示会话状态（见下节） |
 | 抛掷物理 | 拖住快速甩出，抛物线飞行、撞墙落地反弹；摔狠了会播放生气表情 |
 | 零权限 | 不申请辅助功能、不申请屏幕录制，全部使用公开系统 API |
 
@@ -101,13 +101,21 @@
 
 | 能力 | 说明 |
 | --- | --- |
-| 状态提醒 | qwen / qodercli（官方 hook）、opencode（插件）、omp / omo（扩展）、dsh（Cordis 插件）接入事件上报：agent 等确认、报错、完成一轮时气泡 + 动作 + 提示音（提示音可关） |
+| 状态提醒 | qwen / qodercli / codex（官方 hook）、opencode（插件）、omp / omo（扩展）、dsh（Cordis 插件）接入事件上报：agent 等确认、报错、完成一轮时气泡 + 动作 + 提示音（提示音可关） |
 | 内容摘要 | 提醒气泡附带会话摘要：等确认显示要确认什么、完成显示 agent 最后回复片段、报错显示错误信息；截取原文前 60 字，仅本机处理 |
 | 状态展示 | 菜单实时列出每个会话：干活中 / 等确认 / 已完成，久无动静的会话自动清掉 |
 | 本机回环 | 只监听 127.0.0.1 上的一个最小 HTTP 端口收事件：无网络权限请求、不起子进程、无第三方依赖 |
-| 静默兜底 | YierPet 未运行时钩子静默失败，不影响 agent 本身；安装自动备份原配置，卸载只删 yierpet 自己的条目 |
+| 静默兜底 | YierPet 未运行时钩子静默失败，不影响 agent 本身；安装自动备份原配置（`.yierpet-bak`），卸载只删 yierpet 自己的条目和授信键 |
 
-使用：右键 → Agent 哨兵 →「安装 Agent 钩子」，卸载同样一键（覆盖 qwen / qodercli / opencode / omp / omo）。
+使用：右键 → Agent 哨兵 →「安装 Agent 钩子」，卸载同样一键（覆盖 qwen / qodercli / codex / opencode / omp / omo）。
+
+**codex（Codex CLI）** 用官方 hooks 机制接入：钩子写进 `~/.codex/hooks.json`（7 个生命周期事件），
+codex 要求每个钩子「授信」后才执行，YierPet 会按 codex 自己的哈希规则在 `~/.codex/config.toml`
+的 `[hooks.state]` 里替**自己那几条**写好授信，装完即用，不用再去 `/hooks` 逐条确认；别人的钩子
+和授信条目一概不动，卸载也只删自己写进去的键。两处限制：codex 没有「空闲等你输入」的专用事件，
+等确认提醒只在真正需要批准的 `PermissionRequest` 上触发（`sandbox_mode = "danger-full-access"`
+之类免批准的模式下不会有等确认提醒）；codex 也没有报错专用事件，限流 / 服务端报错由回合结束的
+`Stop` 事件带出错误原文。
 
 **dsh（DeepSeek Harness）** 走独立的 Cordis 插件，不在这个一键安装里：
 

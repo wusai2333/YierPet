@@ -242,3 +242,54 @@ private func payload(_ json: String) -> Data { Data(json.utf8) }
                 payload: payload(#"{"error":"upstream 503"}"#), cwd: "/w")
                 == "upstream 503")
     }
+
+    // MARK: Codex CLI
+
+    @Test func codexStopPrefersLastAssistantMessage() {
+        // codex 没有 StopFailure：API 报错也走 Stop，错误原文在
+        // last_assistant_message 里，优先用它当摘要
+        let out = AgentPayloadSummary.summary(
+            tool: .codex, hook: "Stop",
+            payload: payload(#"{"hook_event_name":"Stop","last_assistant_message":"429 rate limit exceeded, retrying later","transcript_path":"/nope"}"#),
+            cwd: "/w")
+        #expect(out == "429 rate limit exceeded, retrying later")
+    }
+
+    @Test func codexStopFallsBackToTranscript() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(
+            at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("t.jsonl")
+        try #"{"message":{"role":"assistant","content":[{"type":"text","text":"codex 说收工"}]}}"#
+            .write(to: file, atomically: true, encoding: .utf8)
+        let out = AgentPayloadSummary.summary(
+            tool: .codex, hook: "Stop",
+            payload: payload(#"{"last_assistant_message":null,"transcript_path":"\#(file.path)"}"#),
+            cwd: "/w")
+        #expect(out == "codex 说收工")
+    }
+
+    @Test func codexPermissionRequestUsesToolInput() {
+        let out = AgentPayloadSummary.summary(
+            tool: .codex, hook: "PermissionRequest",
+            payload: payload(
+                #"{"tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/x"}}"#),
+            cwd: "/w")
+        #expect(out == "Bash：rm -rf /tmp/x")
+    }
+
+    @Test func codexHeartbeatsHaveNoSummary() {
+        // 心跳事件只推状态，不抽摘要
+        #expect(AgentPayloadSummary.summary(
+            tool: .codex, hook: "UserPromptSubmit",
+            payload: payload(#"{"prompt":"干活"}"#), cwd: "/w") == nil)
+        #expect(AgentPayloadSummary.summary(
+            tool: .codex, hook: "PreToolUse",
+            payload: payload(#"{"tool_input":{"command":"ls"}}"#), cwd: "/w") == nil)
+        let post = AgentPayloadSummary.summary(
+            tool: .codex, hook: "PostToolUse",
+            payload: payload(#"{"tool_response":"probe\n"}"#), cwd: "/w")
+        #expect(post == "probe")
+    }
