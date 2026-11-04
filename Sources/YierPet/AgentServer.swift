@@ -17,14 +17,24 @@ final class AgentServer {
     static let dir = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent(".yierpet")
     static let endpointURL = dir.appendingPathComponent("endpoint")
+    /// 测试用：换掉落盘位置，别真去动 ~/.yierpet/endpoint。
+    var endpointOverride: URL?
+    private var endpointFile: URL { endpointOverride ?? Self.endpointURL }
 
     var endpointString: String? {
         port.map { "http://127.0.0.1:\($0)/event" }
     }
 
     func start() {
-        // 幂等：先收掉旧 listener，重复调用（如重装钩子）不泄漏
-        stop()
+        // 幂等：先收掉旧 listener，重复调用（如菜单重装钩子）不泄漏。
+        // 重绑期间**不删** endpoint 文件：删了要等新监听器 .ready 才写回，
+        // 这个窗口里 hook.sh 读不到端点会静默 exit 0，事件全丢（实测发生过）。
+        // 新端口就绪后原子覆盖旧内容，读方只会看到"旧的或新的"。
+        shutdown(removeEndpoint: false)
+        bind()
+    }
+
+    private func bind() {
         let params = NWParameters.tcp
         // 仅本机回环可达
         params.requiredInterfaceType = .loopback
@@ -46,17 +56,26 @@ final class AgentServer {
     }
 
     func stop() {
+        shutdown(removeEndpoint: true)
+    }
+
+    private func shutdown(removeEndpoint: Bool) {
         listener?.cancel()
         listener = nil
         port = nil
-        try? FileManager.default.removeItem(at: Self.endpointURL)
+        if removeEndpoint {
+            try? FileManager.default.removeItem(at: endpointFile)
+        }
     }
 
     private func writeEndpointFile() {
         guard let endpoint = endpointString else { return }
         try? FileManager.default.createDirectory(
-            at: Self.dir, withIntermediateDirectories: true)
-        try? endpoint.data(using: .utf8)?.write(to: Self.endpointURL)
+            at: endpointFile.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        // .atomic：写临时文件再 rename，读方永远看到"旧的或新的"，不会读到半个 URL
+        try? endpoint.data(using: .utf8)?.write(
+            to: endpointFile, options: .atomic)
     }
 
     private func receive(connection: NWConnection, buffer: Data) {
