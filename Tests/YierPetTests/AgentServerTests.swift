@@ -2,12 +2,28 @@ import Foundation
 import Testing
 @testable import YierPet
 
+/// swift test 里造的每个 server 都必须把 endpoint 落到临时目录：
+/// 默认的 ~/.yierpet/endpoint 是真实 app 在用的文件，测试 defer { stop() }
+/// 会把它删掉，于是所有 agent 钩子静默失效（hook.sh 读不到端点直接 exit 0）。
+private func isolatedServer(label: String) -> (
+    server: AgentServer, dir: URL, file: URL
+) {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("yierpet-server-test-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(
+        at: dir, withIntermediateDirectories: true)
+    let server = AgentServer()
+    server.queue = DispatchQueue(label: label)
+    server.endpointOverride = dir.appendingPathComponent("endpoint")
+    return (server, dir, dir.appendingPathComponent("endpoint"))
+}
+
 // `swift test` never drains the main queue (nothing runs the main run
 // loop there), so the server listens on a private queue and the waits
 // below poll in 50 ms slices until the deadline.
 @Test func testReceivesPostedEvent() {
-    let server = AgentServer()
-    server.queue = DispatchQueue(label: "AgentServerTests.event")
+    let (server, testDir, _) = isolatedServer(label: "AgentServerTests.event")
+    defer { try? FileManager.default.removeItem(at: testDir) }
     var received: AgentEvent?
     server.onEvent = { received = $0 }
     server.start()
@@ -45,8 +61,8 @@ import Testing
 }
 
 @Test func testGarbageRequestDoesNotCrash() {
-    let server = AgentServer()
-    server.queue = DispatchQueue(label: "AgentServerTests.garbage")
+    let (server, testDir, _) = isolatedServer(label: "AgentServerTests.garbage")
+    defer { try? FileManager.default.removeItem(at: testDir) }
     server.start()
     defer { server.stop() }
     let readyDeadline = Date().addingTimeInterval(5)
@@ -71,8 +87,8 @@ import Testing
 }
 
 @Test func deliversBodyAsPayload() throws {
-    let server = AgentServer()
-    server.queue = DispatchQueue(label: "agent-server-test-1")
+    let (server, testDir, _) = isolatedServer(label: "agent-server-test-1")
+    defer { try? FileManager.default.removeItem(at: testDir) }
     var received: AgentEvent?
     server.onEvent = { received = $0 }
     server.start()
@@ -103,8 +119,8 @@ import Testing
 }
 
 @Test func negativeContentLengthRejectedWithoutCrash() {
-    let server = AgentServer()
-    server.queue = DispatchQueue(label: "AgentServerTests.negative-cl")
+    let (server, testDir, _) = isolatedServer(label: "AgentServerTests.negative-cl")
+    defer { try? FileManager.default.removeItem(at: testDir) }
     var received: AgentEvent?
     server.onEvent = { received = $0 }
     server.start()
@@ -159,8 +175,8 @@ import Testing
 }
 
 @Test func oversizedBodyDeliversEventWithoutPayload() throws {
-    let server = AgentServer()
-    server.queue = DispatchQueue(label: "agent-server-test-2")
+    let (server, testDir, _) = isolatedServer(label: "agent-server-test-2")
+    defer { try? FileManager.default.removeItem(at: testDir) }
     var received: AgentEvent?
     server.onEvent = { received = $0 }
     server.start()
