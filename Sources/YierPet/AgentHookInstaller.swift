@@ -380,6 +380,11 @@ enum AgentHookInstaller {
         settingsPath: String = codexSettingsURL.path,
         configPath: String = codexConfigURL.path
     ) throws {
+        // Sweep every pre-existing own entry first, across all events:
+        // trust is only computed for codexHookEvents, so an entry an older
+        // build wrote under a since-dropped event would stay in the file
+        // untrusted and silently never fire.
+        try uninstallSettingsHooks(settingsPath: settingsPath)
         try installSettingsHooks(
             settingsPath: settingsPath, tool: .codex,
             events: codexHookEvents)
@@ -543,12 +548,11 @@ enum AgentHookInstaller {
             .components(separatedBy: "\n")
         let keys = Set(trust.keys)
         lines = pruneHookStateTables(lines) { key, _ in keys.contains(key) }.lines
-        var block = ["", "\(trustMarker) BEGIN"]
+        var block = [""]
         for key in keys.sorted() {
             block.append("[hooks.state.\"\(tomlEscape(key))\"]")
             block.append("trusted_hash = \"\(tomlEscape(trust[key]!))\"")
         }
-        block.append("\(trustMarker) END")
         lines.append(contentsOf: block)
         try? lines.joined(separator: "\n")
             .data(using: .utf8)?.write(to: url)
@@ -572,6 +576,10 @@ enum AgentHookInstaller {
         return removed
     }
 
+    /// Legacy region comments written by earlier builds. codex rewrites
+    /// config.toml and reorders tables, which can strand such a comment far
+    /// from its block — so we no longer write them (the state key already
+    /// carries the hooks.json path) but still delete any we find.
     static let trustMarker = "# yierpet codex hook trust"
 
     /// Drops `[hooks.state]` tables whose (key, trusted_hash) satisfies
@@ -586,8 +594,8 @@ enum AgentHookInstaller {
         while index < lines.count {
             let line = lines[index]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            // Our own marker comments vanish together with the region.
-            if trimmed == "\(trustMarker) BEGIN" || trimmed == "\(trustMarker) END" {
+            // Legacy marker comments vanish wherever codex left them.
+            if trimmed.hasPrefix(trustMarker) {
                 index += 1
                 continue
             }

@@ -169,7 +169,44 @@ private func text(of url: URL) throws -> String {
     #expect(entries(root, event: "PostToolUse").count == 3)
     let config = try text(of: fixture.config)
     #expect(config.components(
-        separatedBy: "\(AgentHookInstaller.trustMarker) BEGIN").count == 2)
+        separatedBy: AgentHookInstaller.trustMarker).count == 1)
+}
+
+// codex 会重写 config.toml 并重排表，注释式区域标记会被甩到别处变成孤儿。
+// 所以不再写标记，并且要把旧版本留下的散落标记清掉。
+@Test func writeHookStateTrustClearsLegacyMarkerLines() throws {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("yierpet-test-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(
+        at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let config = dir.appendingPathComponent("config.toml")
+    try """
+    model = "gpt-6.1-sol"
+
+    \(AgentHookInstaller.trustMarker) BEGIN
+
+    [tui]
+    screen_reader_detection = true
+
+    [projects."~/x"]
+    trust_level = "trusted"
+
+    """.data(using: .utf8)!.write(to: config)
+
+    AgentHookInstaller.writeHookStateTrust(configPath: config.path, trust: [
+        "/tmp/h.json:stop:0:0": "sha256:aa",
+    ])
+    let written = try text(of: config)
+    #expect(!written.contains(AgentHookInstaller.trustMarker))
+    // 别人的段落原样保留
+    #expect(written.contains("[tui]"))
+    #expect(written.contains("screen_reader_detection = true"))
+    #expect(written.contains("[projects.\"~/x\"]"))
+    #expect(written.contains("model = \"gpt-6.1-sol\""))
+    // 我们的块只有一个，且带值
+    #expect(written.components(separatedBy: "[hooks.state.\"/tmp/h.json:stop:0:0\"]").count == 2)
+    #expect(written.contains("trusted_hash = \"sha256:aa\""))
 }
 
 @Test func codexInstallNeverShiftsForeignTrustKeys() throws {
