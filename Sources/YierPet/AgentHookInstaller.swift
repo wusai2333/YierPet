@@ -659,12 +659,15 @@ enum AgentHookInstaller {
     private static func ownEntry(
         tool: AgentTool, event: String
     ) -> [String: Any] {
-        [
+        // codex 把 SessionEnd 钩子的超时钳到 3s（超了会在启动时告警）；
+        // hook.sh 的 curl 本身就只等 1s，这里直接写它允许的上限。
+        let timeout = (tool == .codex && event == "SessionEnd") ? 3 : 10
+        return [
             "matcher": "*",
             "hooks": [[
                 "type": "command",
                 "command": "\(scriptURL.path) \(tool.rawValue) \(event)",
-                "timeout": 10,
+                "timeout": timeout,
             ]],
         ]
     }
