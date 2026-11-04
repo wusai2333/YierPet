@@ -100,37 +100,36 @@ private func waitReady(_ server: AgentServer, seconds: TimeInterval = 5) -> Bool
 // 六个 agent 的提醒一起静默消失（hook.sh 读不到端点就 exit 0）。
 @Test func serverTestsDoNotTouchLiveEndpointFile() throws {
     let live = AgentServer.endpointURL
-    let snapshot = FileManager.default.temporaryDirectory
-        .appendingPathComponent("yierpet-live-\(UUID().uuidString)")
-    let existed = FileManager.default.fileExists(atPath: live.path)
-    if existed { try FileManager.default.copyItem(at: live, to: snapshot) }
-    defer {
-        if existed { try? FileManager.default.removeItem(at: live) }
-        if FileManager.default.fileExists(atPath: snapshot.path) {
-            try? FileManager.default.copyItem(
-                at: snapshot, to: live)  // 万一被删，顺带恢复回来
+    func stat() -> (exists: Bool, data: Data?, inode: Int, mtime: Double) {
+        guard FileManager.default.fileExists(atPath: live.path) else {
+            return (false, nil, -1, 0)
         }
-        try? FileManager.default.removeItem(at: snapshot)
+        let attrs = try? FileManager.default.attributesOfItem(atPath: live.path)
+        return (true, try? Data(contentsOf: live),
+                attrs?[FileAttributeKey("inode")] as? Int ?? -1,
+                (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)
     }
+    let before = stat()
 
-    let dir = FileManager.default.temporaryDirectory
-        .appendingPathComponent("yierpet-isolation-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(
-        at: dir, withIntermediateDirectories: true)
-    let server = AgentServer()
-    server.queue = DispatchQueue(label: "isolation")
-    server.endpointOverride = dir.appendingPathComponent("endpoint")
+    let (server, dir, _) = makePinnedServer(name: "isolation")
+    let file = try #require(server.endpointOverride)
     server.start()
     #expect(waitReady(server))
-    #expect(FileManager.default.fileExists(atPath: dir.path))
+    // 隔离生效的直接证据：端点写在临时目录里
+    let written = try String(contentsOf: file, encoding: .utf8)
+    #expect(written == server.endpointString)
+    let afterStart = stat()
+    #expect(afterStart.exists == before.exists)
+    #expect(afterStart.data == before.data)
+    #expect(afterStart.inode == before.inode,
+            "start() 重写了真实 endpoint（inode 变了）——落盘没走隔离")
     server.stop()
     try? FileManager.default.removeItem(at: dir)
 
-    let nowExists = FileManager.default.fileExists(atPath: live.path)
-    #expect(nowExists == existed, "真实 endpoint 文件的存在性被改动了")
-    if existed {
-        let before = try Data(contentsOf: snapshot)
-        let after = try Data(contentsOf: live)
-        #expect(before == after, "真实 endpoint 文件内容被改动了")
-    }
+    let after = stat()
+    #expect(after.exists == before.exists, "真实 endpoint 文件的存在性被改动了")
+    #expect(after.data == before.data, "真实 endpoint 文件内容被改动了")
+    #expect(after.inode == before.inode,
+            "真实 endpoint 被重写过（inode 漂移）——测试不许搬运用户的文件")
+    #expect(after.mtime == before.mtime)
 }
