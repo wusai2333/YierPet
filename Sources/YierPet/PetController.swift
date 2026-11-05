@@ -799,8 +799,20 @@ final class PetController: NSObject {
                     keyEquivalent: ""
                 )
                 item.target = self
-                item.representedObject = kind.rawValue
+                item.representedObject = [kind.rawValue]
                 testMenu.addItem(item)
+                // agent 类提醒再给一套 codex 的：能直接看到它的专属文案，
+                // 其中"报错"演练的是看门狗路径（codex 失败不发 Stop）
+                if kind.isAgent {
+                    let codex = NSMenuItem(
+                        title: "触发 codex · " + kind.title,
+                        action: #selector(menuTestReminder(_:)),
+                        keyEquivalent: ""
+                    )
+                    codex.target = self
+                    codex.representedObject = [kind.rawValue, AgentTool.codex.rawValue]
+                    testMenu.addItem(codex)
+                }
             }
             let testItem = NSMenuItem(
                 title: "测试提醒", action: nil, keyEquivalent: "")
@@ -872,10 +884,14 @@ final class PetController: NSObject {
     }
 
     @objc private func menuTestReminder(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
+        // [提醒类型] 或 [提醒类型, 工具]：第二项缺省走默认工具（qwen）
+        guard let tags = sender.representedObject as? [String],
+              let raw = tags.first,
               let kind = ReminderKind(rawValue: raw) else { return }
         if kind.isAgent {
-            agentCenter.simulate(kind)
+            let tool = tags.count > 1
+                ? (AgentTool(rawValue: tags[1]) ?? .qwen) : .qwen
+            agentCenter.simulate(kind, tool: tool)
         } else {
             reminderCenter.fire(kind)
         }

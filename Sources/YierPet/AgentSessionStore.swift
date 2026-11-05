@@ -47,6 +47,10 @@ struct AgentSessionStore {
         var lastNudge: Date
         var lastErrorAlert: Date
         var lastDetail: String? = nil
+        /// 本轮开工时间（UserPromptSubmit）。codex 报错的那一轮不会发 Stop
+        /// （实测），所以用"开工后迟迟没收口"兜住失败/挂起。
+        var lastTurnStart: Date? = nil
+        var lastStallAlert: Date = .distantPast
     }
 
     struct SessionInfo {
@@ -59,6 +63,10 @@ struct AgentSessionStore {
     static let nudgeInterval: TimeInterval = 120
     static let errorThrottle: TimeInterval = 60
     static let staleAfter: TimeInterval = 600
+    /// 看门狗：一轮开工后迟迟没收到收口事件，就按报错提醒一次。
+    /// 阈值必须短于 staleAfter(600s)，否则会话先被当"久无动静"清掉、永远等不到提醒。
+    static let stallAfter: TimeInterval = 300
+    static let stallThrottle: TimeInterval = 300
 
     private(set) var sessions: [String: Session] = [:]
 
@@ -98,7 +106,7 @@ struct AgentSessionStore {
         var session = sessions[key] ?? Session(
             tool: event.tool, cwd: event.cwd, state: .done,
             lastEvent: now, lastNudge: .distantPast,
-            lastErrorAlert: .distantPast)
+            lastErrorAlert: .distantPast, lastStallAlert: .distantPast)
         let previous = session.state
         session.lastEvent = now
         if let detail, !detail.isEmpty { session.lastDetail = detail }
@@ -115,6 +123,7 @@ struct AgentSessionStore {
             }
         case "Stop":
             session.state = .done
+            session.lastTurnStart = nil   // 收口了，看门狗重新计时
             if event.tool.carriesErrorOnStop && event.isFailure == true {
                 // codex 把 API 报错也塞在 Stop 里（限流/网关错误都会走到这里）：
                 // 按报错提醒，并共用 errorThrottle，免得重试循环刷屏
@@ -134,6 +143,7 @@ struct AgentSessionStore {
             // StopFailure（qwen/qodercli 的 API 错误终止）回合已结束；
             // PostToolUseFailure 只是工具出错，agent 还在干活。
             session.state = event.hook == "StopFailure" ? .done : .working
+            if event.hook == "StopFailure" { session.lastTurnStart = nil }
             if now.timeIntervalSince(session.lastErrorAlert)
                 >= Self.errorThrottle {
                 session.lastErrorAlert = now
@@ -147,6 +157,8 @@ struct AgentSessionStore {
             if event.hook == "UserPromptSubmit" {
                 // 新轮次：清掉上一轮摘要，防提取失败时气泡显示陈旧内容
                 session.lastDetail = nil
+                // 记下开工时间，看门狗据此判断"迟迟没收口"
+                session.lastTurnStart = now
             }
         }
 
@@ -154,23 +166,49 @@ struct AgentSessionStore {
         return alert
     }
 
-    /// needsConfirm sessions due for a re-nudge.
+    /// needsConfirm 到点的重提醒 + 看门狗：一轮开工后迟迟没收到收口事件。
     mutating func dueNudges(at now: Date) -> [AgentAlert] {
         var alerts: [AgentAlert] = []
-        for (key, var session) in sessions
-        where session.state == .needsConfirm
-            && now.timeIntervalSince(session.lastNudge)
-                >= Self.nudgeInterval {
-            session.lastNudge = now
+        for (key, var session) in sessions {
+            if session.state == .needsConfirm,
+               now.timeIntervalSince(session.lastNudge) >= Self.nudgeInterval {
+                session.lastNudge = now
+                sessions[key] = session
+                alerts.append(
+                    AgentAlert(
+                        kind: .needsConfirm, tool: session.tool,
+                        project: Self.project(of: session.cwd),
+                        detail: session.lastDetail))
+                continue
+            }
+            // 看门狗只对"报错不发声"的工具开火（codex：失败的 turn 根本不发 Stop，
+            // qwen/qodercli/opencode 等有自己的失败事件，不需要，免得长任务误报）。
+            guard session.tool.carriesErrorOnStop,
+                  session.state == .working,
+                  let turnStart = session.lastTurnStart,
+                  now.timeIntervalSince(turnStart) >= Self.stallAfter,
+                  now.timeIntervalSince(session.lastStallAlert)
+                    >= Self.stallThrottle
+            else { continue }
+            session.lastStallAlert = now
             sessions[key] = session
+            let minutes = Int(now.timeIntervalSince(turnStart) / 60)
             alerts.append(
                 AgentAlert(
-                    kind: .needsConfirm, tool: session.tool,
+                    kind: .error, tool: session.tool,
                     project: Self.project(of: session.cwd),
-                    detail: session.lastDetail))
+                    detail: "已经 \(minutes) 分钟没回话（本轮起于 "
+                        + Self.clockFormatter.string(from: turnStart) + "）"))
         }
         return alerts
     }
+
+    private static let clockFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "HH:mm"
+        return f
+    }()
 
     /// Drops sessions silent for staleAfter (agent exited or was killed).
     mutating func pruneStale(at now: Date) {

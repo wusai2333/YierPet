@@ -113,22 +113,66 @@ final class AgentCenter {
     }
 
     /// Injects a fake event for the hidden test menu.
-    func simulate(_ kind: ReminderKind) {
+    /// `tool` 决定用哪个工具的事件形状与文案（默认 qwen，保持旧行为）。
+    func simulate(_ kind: ReminderKind, tool: AgentTool = .qwen) {
         let cwd = FileManager.default.currentDirectoryPath
         switch kind {
         case .agentNeedsConfirm:
             handle(AgentEvent(
-                tool: .qwen, hook: "PermissionRequest", cwd: cwd))
+                tool: tool, hook: "PermissionRequest", cwd: cwd,
+                payload: Self.simulatePayload(
+                    tool: tool, key: "tool_name", value: "shell",
+                    extra: [
+                        "tool_input": [
+                            "command": "rm -rf node_modules && npm i",
+                        ],
+                    ])))
         case .agentDone:
+            handle(AgentEvent(tool: tool, hook: "UserPromptSubmit", cwd: cwd))
             handle(AgentEvent(
-                tool: .qwen, hook: "UserPromptSubmit", cwd: cwd))
-            handle(AgentEvent(tool: .qwen, hook: "Stop", cwd: cwd))
+                tool: tool, hook: "Stop", cwd: cwd,
+                payload: Self.simulatePayload(
+                    tool: tool, key: "last_assistant_message", value: "改完了，测试都过了")))
         case .agentError:
-            handle(AgentEvent(
-                tool: .qwen, hook: "PostToolUseFailure", cwd: cwd))
+            if tool.carriesErrorOnStop {
+                // codex 报错的那一轮不发 Stop（实测）：真实可见的提醒来自看门狗，
+                // 所以这里演练看门狗路径，而不是伪造一个 Stop。
+                // 开工时间就记在当下 —— 若把事件时间伪造成过去，
+                // 同一次 tick 里的 pruneStale 会先把会话清掉，提醒永远发不出来。
+                handle(AgentEvent(
+                    tool: tool, hook: "UserPromptSubmit", cwd: cwd,
+                    payload: Self.simulatePayload(
+                        tool: tool, key: "prompt",
+                        value: "这条是看门狗演练：假装这一轮迟迟没收口")))
+                let advanced = Date().addingTimeInterval(
+                    AgentSessionStore.stallAfter + 1)
+                for alert in store.dueNudges(at: advanced)
+                where isEnabled(alert.tool) {
+                    fire(alert)
+                }
+            } else {
+                handle(AgentEvent(
+                    tool: tool, hook: "PostToolUseFailure", cwd: cwd,
+                    payload: Self.simulatePayload(
+                        tool: tool, key: "error",
+                        value: "429 rate limit exceeded, retrying later")))
+            }
         default:
             break
         }
+    }
+
+    private static func simulatePayload(
+        tool: AgentTool, key: String, value: String,
+        extra: [String: Any] = [:]
+    ) -> Data? {
+        var object: [String: Any] = [
+            "hook_event_name": "Simulate", "session_id": "simulate",
+            "turn_id": "simulate", "cwd": FileManager.default.currentDirectoryPath,
+            key: value,
+        ]
+        for (k, v) in extra { object[k] = v }
+        return try? JSONSerialization.data(withJSONObject: object)
     }
 
     private static let messages: [AgentAlertKind: [String]] = [
