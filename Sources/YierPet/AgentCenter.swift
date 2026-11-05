@@ -144,8 +144,13 @@ final class AgentCenter {
                     payload: Self.simulatePayload(
                         tool: tool, key: "prompt",
                         value: "这条是看门狗演练：假装这一轮迟迟没收口")))
+                // 与真实 tick 同构：先按注入时刻 prune，再取到期提醒。
+                // 真实会话的 lastEvent 就在当下，注入 301s 仍 < staleAfter(600s)，
+                // 不会被误清；缺这一步的话，这次演练会顺带把别的真实会话的
+                // 重提醒/看门狗计时也推进 5 分钟，让它们无声地晚提醒。
                 let advanced = Date().addingTimeInterval(
                     AgentSessionStore.stallAfter + 1)
+                store.pruneStale(at: advanced)
                 for alert in store.dueNudges(at: advanced)
                 where isEnabled(alert.tool) {
                     fire(alert)
