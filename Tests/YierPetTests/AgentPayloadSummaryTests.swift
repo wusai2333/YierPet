@@ -245,9 +245,10 @@ private func payload(_ json: String) -> Data { Data(json.utf8) }
 
     // MARK: Codex CLI
 
-    @Test func codexStopPrefersLastAssistantMessage() {
-        // codex 没有 StopFailure：API 报错也走 Stop，错误原文在
-        // last_assistant_message 里，优先用它当摘要
+    @Test func codexStopUsesLastAssistantMessageWhenNoTranscript() {
+        // 没有可读 transcript 时退回钩子字段。注意：真实的 codex 报错**不会**发 Stop
+        // （stop 载荷里也没有 error 字段），所以"错误原文出现在 last_assistant_message"
+        // 只是防御性路径，不代表报错能被实时提醒 —— 报错形状见 AgentCodexCopyTests。
         let out = AgentPayloadSummary.summary(
             tool: .codex, hook: "Stop",
             payload: payload(#"{"hook_event_name":"Stop","last_assistant_message":"429 rate limit exceeded, retrying later","transcript_path":"/nope"}"#),
@@ -255,7 +256,8 @@ private func payload(_ json: String) -> Data { Data(json.utf8) }
         #expect(out == "429 rate limit exceeded, retrying later")
     }
 
-    @Test func codexStopFallsBackToTranscript() throws {
+    @Test func codexStopFallsBackToTranscriptAssistantText() throws {
+        // transcript 里没有 task_complete（老版本/被截断）时，退回通用的尾部助手文本读取
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(
