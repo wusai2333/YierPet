@@ -3,6 +3,10 @@ import Foundation
 /// Agent tools that YierPet can watch.
 enum AgentTool: String, CaseIterable {
     case qwen, qodercli, opencode, omp, omo, dsh, codex
+
+    /// 该工具的 Stop 事件里混着报错（没有独立的失败事件）——
+    /// Stop 载荷标为失败时要按报错提醒，而不是"干完啦"。
+    var carriesErrorOnStop: Bool { self == .codex }
 }
 
 /// What the pet should announce.
@@ -25,6 +29,10 @@ struct AgentEvent {
     let hook: String
     let cwd: String
     var payload: Data? = nil
+    /// 该事件本身代表"这一轮以失败收场"（目前只有 codex 的 Stop 会置位：
+    /// codex 没有 StopFailure/Notification 事件，且 stop 载荷里没有 error 字段，
+    /// 失败要从 transcript 的 task_complete.error.message 判定，见 AgentPayloadSummary）。
+    var isFailure: Bool? = nil
 }
 
 /// Pure agent session state machine: no timers, no I/O. Callers inject `now`.
@@ -107,7 +115,17 @@ struct AgentSessionStore {
             }
         case "Stop":
             session.state = .done
-            if previous != .done {
+            if event.tool.carriesErrorOnStop && event.isFailure == true {
+                // codex 把 API 报错也塞在 Stop 里（限流/网关错误都会走到这里）：
+                // 按报错提醒，并共用 errorThrottle，免得重试循环刷屏
+                if now.timeIntervalSince(session.lastErrorAlert)
+                    >= Self.errorThrottle {
+                    session.lastErrorAlert = now
+                    alert = AgentAlert(
+                        kind: .error, tool: event.tool,
+                        project: Self.project(of: event.cwd), detail: detail)
+                }
+            } else if previous != .done {
                 alert = AgentAlert(
                     kind: .done, tool: event.tool,
                     project: Self.project(of: event.cwd), detail: detail)

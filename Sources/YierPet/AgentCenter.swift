@@ -82,9 +82,20 @@ final class AgentCenter {
 
     private func handle(_ event: AgentEvent) {
         guard isEnabled, isEnabled(event.tool) else { return }
-        let detail = AgentPayloadSummary.summary(
-            tool: event.tool, hook: event.hook, payload: event.payload,
-            cwd: event.cwd)
+        var event = event
+        let detail: String?
+        if event.tool == .codex, event.hook == "Stop", event.isFailure == nil,
+           let payload = event.payload {
+            // codex 没有失败专用事件，Stop 里混着 API 报错：一次解析拿到
+            // 摘要 + 是否失败，失败标志交给状态机按报错提醒。
+            let parsed = AgentPayloadSummary.codexStop(payload)
+            detail = AgentPayloadSummary.clean(parsed.detail)
+            event.isFailure = parsed.isFailure
+        } else {
+            detail = AgentPayloadSummary.summary(
+                tool: event.tool, hook: event.hook, payload: event.payload,
+                cwd: event.cwd)
+        }
         if let alert = store.apply(event, detail: detail, at: Date()) {
             fire(alert)
         }
@@ -138,8 +149,32 @@ final class AgentCenter {
         ],
     ]
 
+    /// codex 专属文案。它的"等确认"是沙箱越界审批、"报错"是网关/限流把请求弹回来
+    /// （都从 codex 0.166 实测的事件语义来），跟通用模板的话风区分开。
+    /// 其余六个工具仍走 messages 里的通用模板，一字未改。
+    private static let toolMessages: [AgentTool: [AgentAlertKind: [String]]] = [
+        .codex: [
+            .needsConfirm: [
+                "codex 想越出沙箱动 {proj}，得你点头才行～",
+                "{proj} 里的 codex 卡在了授权这一步，等你批！",
+                "codex 在 {proj} 举着命令等你放行呐",
+            ],
+            .done: [
+                "codex 交了 {proj} 这轮，回头验收一下～",
+                "叮——codex 在 {proj} 说它搞定了！",
+                "{proj} 这边 codex 收工啦，下一句给它？",
+            ],
+            .error: [
+                "codex 在 {proj} 被网关弹回来了……去看看？",
+                "呜，codex 在 {proj} 把这轮跑丢了（多半是接口）……",
+                "codex 卡在 {proj} 的请求里出不来了，快去瞅一眼！",
+            ],
+        ],
+    ]
+
     static func message(for alert: AgentAlert) -> String {
-        let template = messages[alert.kind]?.randomElement() ?? ""
+        let pool = toolMessages[alert.tool]?[alert.kind] ?? messages[alert.kind]
+        let template = pool?.randomElement() ?? ""
         var text = template
             .replacingOccurrences(of: "{tool}", with: alert.tool.rawValue)
             .replacingOccurrences(of: "{proj}", with: alert.project)

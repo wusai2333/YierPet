@@ -29,10 +29,7 @@ enum AgentPayloadSummary {
             // API 错误终止（限流/服务端）：error_details 是可读错误信息
             raw = firstString(payload, keys: ["error_details", "error"])
         case (.codex, "Stop"):
-            // codex 没有 StopFailure 事件：API 报错时 Stop 仍会触发，
-            // last_assistant_message 就是错误原文，直接拿它当摘要。
-            raw = firstString(payload, keys: ["last_assistant_message"])
-                ?? transcriptSummary(payload)
+            raw = codexStop(payload).0
         case (.codex, "PermissionRequest"):
             raw = permissionSummary(payload)
         case (.codex, "PostToolUse"):
@@ -51,6 +48,63 @@ enum AgentPayloadSummary {
             return nil
         }
         return clean(raw)
+    }
+
+    /// codex 的 Stop：成功时给最终回复，报错时给错误原文 + 失败标志。
+    ///
+    /// 实测（codex 0.166，本机 135 条 task_complete 里 13 条失败）：
+    /// stop 钩子的载荷里**没有 error 字段**，失败时 `last_assistant_message`
+    /// 直接是 null —— 所以错误原文只能从 transcript 的
+    /// `{"type":"event_msg","payload":{"type":"task_complete","error":{"message":…}}}` 取。
+    static func codexStop(_ payload: Data) -> (detail: String?, isFailure: Bool) {
+        let hookMessage = firstString(payload, keys: ["last_assistant_message"])
+        let transcript = (stringValue(in: payload, key: "transcript_path")
+            ?? stringValue(in: payload, key: "agent_transcript_path"))
+        let final = (transcript?.isEmpty == false)
+            ? codexFinalTurn(inTranscript: transcript!) : nil
+        if let final {
+            if let error = final.error { return (error, true) }
+            // 载荷字段优先（本来就是同一句话），缺失时用 transcript 兜底
+            return (hookMessage ?? final.message, false)
+        }
+        // 读不到 transcript：退回钩子字段。null/缺失视为拿不到错误原文，
+        // 但不硬判成失败，免得把正常完工说成报错。
+        return (hookMessage ?? transcriptSummary(payload), false)
+    }
+
+    /// 扫 transcript 末尾，找最后一条 task_complete：
+    /// 它同时带着最终回复（last_agent_message）和失败原因（error.message）。
+    static func codexFinalTurn(
+        inTranscript path: String, tailBytes: Int = transcriptTailBytes
+    ) -> (message: String?, error: String?)? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        let size = handle.seekToEndOfFile()
+        let offset = size > UInt64(tailBytes) ? size - UInt64(tailBytes) : 0
+        handle.seek(toFileOffset: offset)
+        guard var data = try? handle.readToEnd() else { return nil }
+        // 非零偏移可能落在半行上：丢掉第一行残片
+        if offset > 0, let newline = data.firstIndex(of: 0x0A) {
+            data.removeSubrange(data.startIndex...newline)
+        }
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        for line in text.components(separatedBy: "\n").reversed() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty,
+                  let lineData = trimmed.data(using: .utf8),
+                  let object = (try? JSONSerialization.jsonObject(
+                      with: lineData)) as? [String: Any],
+                  (object["type"] as? String) == "event_msg",
+                  let payload = object["payload"] as? [String: Any],
+                  (payload["type"] as? String) == "task_complete"
+            else { continue }
+            let errorMessage = ((payload["error"] as? [String: Any])?["message"]
+                as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (
+                payload["last_agent_message"] as? String,
+                (errorMessage?.isEmpty ?? true) ? nil : errorMessage)
+        }
+        return nil
     }
 
     /// Compresses whitespace/newlines, trims, truncates to maxChars.
